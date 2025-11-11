@@ -44,24 +44,29 @@
 .interactive-button {
   position: relative;
   overflow: hidden;
-  transition: transform 200ms ease, box-shadow 200ms ease, background-color 200ms ease;
+  transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+  will-change: transform, box-shadow;
+  transform: translateZ(0);
 }
 
-.interactive-button::after {
-  content: '';
-  position: absolute;
-  inset: -60%;
-  background:
-    radial-gradient(circle at 25% 25%, rgba(244, 63, 94, 0.28), transparent 60%),
-    radial-gradient(circle at 70% 70%, rgba(34, 211, 238, 0.32), transparent 65%);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 220ms ease;
+.interactive-button:hover,
+.interactive-button:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.22);
 }
 
-.interactive-button:hover::after,
-.interactive-button:focus-visible::after {
-  opacity: 1;
+@media (prefers-reduced-motion: reduce) {
+  .interactive-button {
+    transition: background-color 120ms ease;
+    transform: none;
+    will-change: auto;
+  }
+
+  .interactive-button:hover,
+  .interactive-button:focus-visible {
+    transform: none;
+    box-shadow: none;
+  }
 }
 
 @keyframes glowOrbit {

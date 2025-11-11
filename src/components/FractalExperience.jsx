@@ -9,7 +9,7 @@ const FRACTAL_PALETTES = [
   ['#f97316', '#fb7185', '#f472b6', '#a855f7', '#22d3ee', '#4ade80'],
 ];
 
-const MIN_RENDER_INTERVAL = 5;
+const MIN_RENDER_INTERVAL = 16;
 const MAX_DEVICE_PIXEL_RATIO = 2;
 const ZOOM_SMOOTHING_FACTOR = 0.85; // Higher = smoother but slower response (0-1)
 const POINTER_SMOOTHING_FACTOR = 0.12; // Frame-rate independent pointer smoothing

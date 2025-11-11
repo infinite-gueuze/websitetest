@@ -16,14 +16,88 @@ const AUTO_ZOOM_MIN_PERCENT = 1;
 const AUTO_ZOOM_MAX_PERCENT = 100;
 const AUTO_ZOOM_MIN_SPEED = 0.001;
 const AUTO_ZOOM_MAX_SPEED = 0.018;
-const PALETTE_COOLDOWN_SECONDS = 10;
-const VARIANT_COOLDOWN_SECONDS = 14;
-const JULIA_COOLDOWN_SECONDS = 8;
-const MUTATION_INTERVAL_MIN = 7;
-const MUTATION_INTERVAL_MAX = 13;
+const PALETTE_COOLDOWN_SECONDS = 24;
+const VARIANT_COOLDOWN_SECONDS = 32;
+const JULIA_COOLDOWN_SECONDS = 20;
+const MUTATION_INTERVAL_MIN = 12;
+const MUTATION_INTERVAL_MAX = 20;
 const ZOOM_DIRECTION_COOLDOWN_SECONDS = 6;
-const ZOOM_OUT_MAX_SECONDS = 4;
+const ZOOM_OUT_MAX_SECONDS = 1.8;
+const FRACTAL_TYPE_COOLDOWN_SECONDS = 26;
+const PALETTE_MUTATION_CHANCE = 0.22;
 const FRACTAL_VARIANTS = ['classic', 'cubic', 'burning-ship', 'perpendicular'];
+const INITIAL_VIEW_SCALE = 0.9;
+const MAX_VIEW_SCALE = 1.1;
+const MIN_VIEW_SCALE = 0.00003;
+const FOCUS_INTERPOLATION = 0.92;
+
+const FOCUS_PRESETS = {
+  mandelbrot: {
+    classic: [
+      { scale: 1.2, center: { x: -0.5, y: 0 } },
+      { scale: 0.35, center: { x: -0.7453, y: 0.1127 } },
+      { scale: 0.12, center: { x: -1.25506, y: 0.3819 } },
+      { scale: 0.045, center: { x: -0.7746809, y: 0.1374169 } },
+      { scale: 0.02, center: { x: -0.7436438870371587, y: 0.13182590420531198 } },
+      { scale: 0.0085, center: { x: -0.745507, y: 0.112531 } },
+      { scale: 0.0022, center: { x: -0.743904, y: 0.131161 } },
+    ],
+    cubic: [
+      { scale: 1.2, center: { x: -0.48, y: 0 } },
+      { scale: 0.26, center: { x: -0.389, y: 0.312 } },
+      { scale: 0.082, center: { x: -0.16, y: 0.652 } },
+      { scale: 0.028, center: { x: -0.06, y: 0.835 } },
+      { scale: 0.009, center: { x: -0.02, y: 0.91 } },
+    ],
+    'burning-ship': [
+      { scale: 1.2, center: { x: -1.75, y: -0.02 } },
+      { scale: 0.22, center: { x: -1.8, y: -0.1 } },
+      { scale: 0.08, center: { x: -1.73, y: -0.18 } },
+      { scale: 0.028, center: { x: -1.75488, y: -0.03 } },
+      { scale: 0.009, center: { x: -1.75465, y: -0.025 } },
+    ],
+    perpendicular: [
+      { scale: 1.2, center: { x: -0.123, y: -0.745 } },
+      { scale: 0.28, center: { x: -0.29, y: -0.62 } },
+      { scale: 0.09, center: { x: -0.44, y: -0.55 } },
+      { scale: 0.032, center: { x: -0.51, y: -0.48 } },
+      { scale: 0.011, center: { x: -0.538, y: -0.462 } },
+    ],
+  },
+};
+
+const SCENE_DEFINITIONS = [
+  {
+    name: 'deep-dive',
+    durationRange: [18, 26],
+    zoomDirection: -1,
+    zoomSpeedRange: [0.0075, 0.013],
+    targetScaleRange: [0.00018, 0.0012],
+    shiftIntensity: 0.26,
+    variantBias: ['classic', 'burning-ship'],
+    paletteBias: [0, 2, 3],
+  },
+  {
+    name: 'breathing-bloom',
+    durationRange: [16, 24],
+    zoomDirection: 1,
+    zoomSpeedRange: [0.004, 0.007],
+    targetScaleRange: [0.8, 1.7],
+    shiftIntensity: 0.18,
+    variantBias: ['cubic', 'perpendicular'],
+    paletteBias: [1, 4, 5],
+  },
+  {
+    name: 'cosmic-orbit',
+    durationRange: [20, 30],
+    zoomDirection: -1,
+    zoomSpeedRange: [0.0055, 0.009],
+    targetScaleRange: [0.004, 0.018],
+    shiftIntensity: 0.4,
+    variantBias: ['classic'],
+    paletteBias: [2, 3, 5],
+  },
+];
 
 function hexToRgb(hex) {
   const normalized = hex.replace('#', '');
@@ -127,6 +201,46 @@ function randomRange(min, max) {
   return min + Math.random() * (max - min);
 }
 
+function pickSceneDefinition(excludeName) {
+  const options = excludeName
+    ? SCENE_DEFINITIONS.filter((scene) => scene.name !== excludeName)
+    : SCENE_DEFINITIONS;
+  return options[Math.floor(Math.random() * options.length)];
+}
+
+function pickFrom(array) {
+  return array[Math.floor(Math.random() * array.length)];
+}
+
+function pickFocusTarget(fractalType, variant, targetScale) {
+  const variantKey = variant || 'classic';
+  const typePresets = FOCUS_PRESETS[fractalType];
+  if (!typePresets) {
+    return null;
+  }
+  const presetList = typePresets[variantKey] || typePresets.classic;
+  if (!presetList || !presetList.length) {
+    return null;
+  }
+  const sorted = [...presetList].sort((a, b) => a.scale - b.scale);
+  for (let i = 0; i < sorted.length; i += 1) {
+    const preset = sorted[i];
+    if (targetScale <= preset.scale * 1.1) {
+      const jitter = preset.scale * 0.18;
+      return {
+        x: preset.center.x + (Math.random() - 0.5) * jitter,
+        y: preset.center.y + (Math.random() - 0.5) * jitter,
+      };
+    }
+  }
+  const fallback = sorted[sorted.length - 1];
+  const jitter = fallback.scale * 0.2;
+  return {
+    x: fallback.center.x + (Math.random() - 0.5) * jitter,
+    y: fallback.center.y + (Math.random() - 0.5) * jitter,
+  };
+}
+
 function randomJuliaSeed() {
   const angle = Math.random() * Math.PI * 2;
   const radius = 0.6 + Math.random() * 0.35;
@@ -180,6 +294,8 @@ export default function FractalExperience() {
   const [autoZoomDirection, setAutoZoomDirection] = useState(-1);
   const [statusMessage, setStatusMessage] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fractalVariant, setFractalVariant] = useState('classic');
+  const [mutationsEnabled, setMutationsEnabled] = useState(true);
 
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -187,7 +303,7 @@ export default function FractalExperience() {
   const viewRef = useRef({
     baseCenterX: initialModeRef.current === 'mandelbrot' ? -0.5 : 0,
     baseCenterY: 0,
-    scale: 3,
+    scale: INITIAL_VIEW_SCALE,
   });
 
   const paletteData = useMemo(() => {
@@ -217,6 +333,7 @@ export default function FractalExperience() {
   const autoZoomSpeedRef = useRef(autoZoomSpeed);
   const autoZoomDirectionRef = useRef(autoZoomDirection);
   const paletteIndexRef = useRef(paletteIndex);
+  const mutationsEnabledRef = useRef(true);
   const ambientStateRef = useRef({
     pulsePhase: Math.random() * Math.PI * 2,
     pulseSpeed: randomRange(0.45, 0.85),
@@ -239,7 +356,39 @@ export default function FractalExperience() {
     seedCooldown: 0,
     zoomDirectionCooldown: 0,
     zoomOutTimer: 0,
+    typeCooldown: 0,
+    sceneName: null,
+    sceneElapsed: 0,
+    sceneDuration: 0,
+    sceneTargetScale: viewRef.current.scale,
+    sceneShiftIntensity: 0.2,
+    focusTarget: {
+      x: viewRef.current.baseCenterX,
+      y: viewRef.current.baseCenterY,
+    },
   });
+
+  const updateFocusTarget = useCallback((scaleOverride) => {
+    const ambient = ambientStateRef.current;
+    const scale =
+      typeof scaleOverride === 'number' && Number.isFinite(scaleOverride)
+        ? scaleOverride
+        : viewRef.current.scale;
+    const focus = pickFocusTarget(
+      fractalTypeRef.current,
+      fractalVariantRef.current,
+      scale,
+    );
+    if (focus) {
+      ambient.focusTarget = { x: focus.x, y: focus.y };
+      const view = viewRef.current;
+      const snapBlend = scale < 0.05 ? 0.8 : 0.4;
+      view.baseCenterX = lerp(view.baseCenterX, focus.x, snapBlend);
+      view.baseCenterY = lerp(view.baseCenterY, focus.y, snapBlend);
+    } else {
+      ambient.focusTarget = null;
+    }
+  }, []);
 
   useEffect(() => {
     paletteBufferRef.current = paletteData.colors;
@@ -249,6 +398,10 @@ export default function FractalExperience() {
   useEffect(() => {
     fractalTypeRef.current = fractalType;
   }, [fractalType]);
+
+  useEffect(() => {
+    fractalVariantRef.current = fractalVariant;
+  }, [fractalVariant]);
 
   useEffect(() => {
     juliaSeedRef.current = juliaSeed;
@@ -265,6 +418,10 @@ export default function FractalExperience() {
   useEffect(() => {
     paletteIndexRef.current = paletteIndex;
   }, [paletteIndex]);
+
+  useEffect(() => {
+    mutationsEnabledRef.current = mutationsEnabled;
+  }, [mutationsEnabled]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -288,6 +445,101 @@ export default function FractalExperience() {
       document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
     };
   }, []);
+
+  const applyScene = useCallback(
+    (sceneDef) => {
+      const ambient = ambientStateRef.current;
+      const view = viewRef.current;
+
+      ambient.sceneName = sceneDef.name;
+      ambient.sceneElapsed = 0;
+      ambient.sceneDuration = randomRange(...sceneDef.durationRange);
+      const baseTarget = randomRange(...sceneDef.targetScaleRange);
+      const currentScale = view.scale;
+      const desiredScale = Math.min(currentScale * 0.7, baseTarget);
+      ambient.sceneTargetScale = clamp(
+        desiredScale,
+        MIN_VIEW_SCALE,
+        MAX_VIEW_SCALE * 0.95,
+      );
+      updateFocusTarget(ambient.sceneTargetScale);
+      ambient.sceneShiftIntensity = sceneDef.shiftIntensity;
+
+      const nextSpeed = clamp(
+        randomRange(...sceneDef.zoomSpeedRange),
+        AUTO_ZOOM_MIN_SPEED,
+        AUTO_ZOOM_MAX_SPEED,
+      );
+      autoZoomSpeedRef.current = nextSpeed;
+      setAutoZoomSpeed(nextSpeed);
+
+      const nextDirection = sceneDef.zoomDirection;
+      autoZoomDirectionRef.current = nextDirection;
+      setAutoZoomDirection(nextDirection);
+      ambient.zoomOutTimer = nextDirection === 1 ? ZOOM_OUT_MAX_SECONDS : 0;
+      ambient.zoomDirectionCooldown =
+        nextDirection === 1 ? ZOOM_OUT_MAX_SECONDS : ZOOM_DIRECTION_COOLDOWN_SECONDS;
+
+      ambient.paletteCooldown = PALETTE_COOLDOWN_SECONDS * 0.6;
+      ambient.variantCooldown = VARIANT_COOLDOWN_SECONDS * 0.75;
+      ambient.typeCooldown = FRACTAL_TYPE_COOLDOWN_SECONDS * 0.75;
+      ambient.mutationElapsed = 0;
+      ambient.mutationInterval = randomRange(MUTATION_INTERVAL_MIN, MUTATION_INTERVAL_MAX);
+
+      const sceneLabel = sceneDef.name.replace(/-/g, ' ');
+      setStatusMessage(`Scene shift: ${sceneLabel}`);
+
+      if (sceneDef.paletteBias && sceneDef.paletteBias.length && Math.random() < 0.7) {
+        let nextPalette = pickFrom(sceneDef.paletteBias);
+        if (nextPalette === paletteIndexRef.current) {
+          nextPalette = (nextPalette + 1) % FRACTAL_PALETTES.length;
+        }
+        paletteIndexRef.current = nextPalette;
+        setPaletteIndex(nextPalette);
+        setStatusMessage((prev) =>
+          prev ? `${prev} • Palette ${nextPalette + 1} tuned` : `Palette ${nextPalette + 1} tuned`,
+        );
+      }
+
+      if (
+        fractalTypeRef.current === 'mandelbrot' &&
+        sceneDef.variantBias &&
+        sceneDef.variantBias.length &&
+        Math.random() < 0.65
+      ) {
+        const nextVariant = pickFrom(sceneDef.variantBias);
+        fractalVariantRef.current = nextVariant;
+        setFractalVariant(nextVariant);
+        updateFocusTarget(ambient.sceneTargetScale);
+        setStatusMessage((prev) =>
+          prev
+            ? `${prev} • Variant shift: ${formatVariantLabel(nextVariant)}`
+            : `Variant shift: ${formatVariantLabel(nextVariant)}`,
+        );
+      }
+
+      if (fractalTypeRef.current === 'julia' && Math.random() < 0.55) {
+        const nextSeed = randomJuliaSeed();
+        juliaSeedRef.current = nextSeed;
+        setJuliaSeed(nextSeed);
+      }
+
+      if (sceneDef.name === 'deep-dive') {
+        const maxShift = view.scale * 0.35;
+        view.baseCenterX += (Math.random() - 0.5) * maxShift;
+        view.baseCenterY += (Math.random() - 0.5) * maxShift;
+      }
+    },
+    [
+      setAutoZoomSpeed,
+      setAutoZoomDirection,
+      setPaletteIndex,
+      setStatusMessage,
+      setJuliaSeed,
+      setFractalVariant,
+      updateFocusTarget,
+    ],
+  );
 
   const focusRingClass =
     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400';
@@ -393,13 +645,20 @@ export default function FractalExperience() {
       const view = viewRef.current;
       const ambient = ambientStateRef.current;
 
+      if (ambient.focusTarget) {
+        const focusBlend = 1 - Math.pow(FOCUS_INTERPOLATION, deltaSeconds * 60);
+        view.baseCenterX += (ambient.focusTarget.x - view.baseCenterX) * focusBlend;
+        view.baseCenterY += (ambient.focusTarget.y - view.baseCenterY) * focusBlend;
+      }
+
       const aspectRatio = height / width;
       const scaledHeight = view.scale * aspectRatio;
       const pointerOffsetX = 0;
       const pointerOffsetY = 0;
 
-      const driftOffsetX = ambient.driftOffsetX * view.scale * 0.45;
-      const driftOffsetY = ambient.driftOffsetY * scaledHeight * 0.45;
+      const driftAttenuation = clamp(view.scale / 0.35, 0.05, 1);
+      const driftOffsetX = ambient.driftOffsetX * view.scale * 0.45 * driftAttenuation;
+      const driftOffsetY = ambient.driftOffsetY * scaledHeight * 0.45 * driftAttenuation;
 
       const centerX = view.baseCenterX + pointerOffsetX + driftOffsetX;
       const centerY = view.baseCenterY + pointerOffsetY + driftOffsetY;
@@ -436,19 +695,23 @@ export default function FractalExperience() {
         worker.postMessage(message);
       }
 
-      // Ultra-smooth zoom calculation - fully frame-rate independent
       const zoomRate = autoZoomSpeedRef.current;
       const zoomDirection = autoZoomDirectionRef.current;
       const currentScale = view.scale;
-      
-      // Calculate instantaneous zoom multiplier per second
-      const perSecondMultiplier = zoomDirection === -1 
-        ? 1 - zoomRate  // Zoom in (scale decreases)
-        : 1 + zoomRate; // Zoom out (scale increases)
-      
-      // Apply zoom over elapsed time for frame-rate independence
+
+      const perSecondMultiplier = zoomDirection === -1
+        ? 1 - zoomRate
+        : 1 + zoomRate;
+
       const timeBasedMultiplier = Math.pow(perSecondMultiplier, deltaSeconds);
-      const rawTargetScale = currentScale * timeBasedMultiplier;
+      const targetScale = ambient.sceneTargetScale || currentScale;
+      const scaleRatio = targetScale / Math.max(currentScale, 1e-9);
+      const targetBias = Math.pow(scaleRatio, 0.35);
+      const guidedMultiplier =
+        zoomDirection === -1
+          ? clamp(timeBasedMultiplier * targetBias, 0.6, 0.98)
+          : clamp(timeBasedMultiplier / Math.max(targetBias, 1e-6), 1.05, 1.45);
+      const rawTargetScale = currentScale * guidedMultiplier;
       const pulseWave = 1 + Math.sin(ambient.pulsePhase) * 0.11;
       const breatheWave =
         1 + Math.sin(ambient.breathePhase * 0.9 + ambient.pulsePhase * 0.33) * 0.06;
@@ -457,12 +720,21 @@ export default function FractalExperience() {
       const easedTargetScale =
         currentScale +
         (rawTargetScale * organicMultiplier - currentScale) * perFrameDamping;
-      
-      // Frame-rate independent exponential smoothing
-      // Converts fixed-per-frame smoothing to time-based smoothing
+
       const zoomSmoothing = 1 - Math.pow(ZOOM_SMOOTHING_FACTOR, deltaSeconds * 60);
-      view.scale = currentScale + (easedTargetScale - currentScale) * zoomSmoothing;
+      view.scale = clamp(
+        currentScale + (easedTargetScale - currentScale) * zoomSmoothing,
+        MIN_VIEW_SCALE,
+        MAX_VIEW_SCALE,
+      );
+
+      if (Math.abs(Math.log(view.scale / Math.max(ambient.sceneTargetScale, 1e-12))) < 0.08) {
+        ambient.sceneElapsed = ambient.sceneDuration;
+      }
     };
+
+    const initialScene = pickSceneDefinition(null);
+    applyScene(initialScene);
 
     animationRef.current = requestAnimationFrame(renderFrame);
 
@@ -476,7 +748,7 @@ export default function FractalExperience() {
       busyRef.current = false;
       pendingViewRef.current = null;
     };
-  }, []);
+  }, [applyScene]);
 
   const alignViewToType = useCallback(
     (type, options = {}) => {
@@ -488,10 +760,12 @@ export default function FractalExperience() {
       }
 
       if (resetScale) {
-        view.scale = 3;
+        view.scale = INITIAL_VIEW_SCALE;
         const ambient = ambientStateRef.current;
         ambient.zoomOutTimer = 0;
         ambient.zoomDirectionCooldown = ZOOM_DIRECTION_COOLDOWN_SECONDS;
+        ambient.sceneTargetScale = INITIAL_VIEW_SCALE;
+        updateFocusTarget(INITIAL_VIEW_SCALE);
 
         autoZoomDirectionRef.current = -1;
         setAutoZoomDirection(-1);
@@ -505,7 +779,7 @@ export default function FractalExperience() {
         setAutoZoomSpeed(nextSpeed);
       }
     },
-    [setAutoZoomDirection, setAutoZoomSpeed],
+    [setAutoZoomDirection, setAutoZoomSpeed, updateFocusTarget],
   );
 
   const runFractalMutation = useCallback(() => {
@@ -513,6 +787,10 @@ export default function FractalExperience() {
     const choices = [];
 
     const ambient = ambientStateRef.current;
+    const currentScene = ambient.sceneName;
+    const sceneBoost =
+      currentScene === 'deep-dive' ? 0.18 : currentScene === 'cosmic-orbit' ? 0.12 : 0;
+    const paletteChance = PALETTE_MUTATION_CHANCE + sceneBoost;
 
     const mutatePalette = () => {
       let nextPalette = Math.floor(Math.random() * FRACTAL_PALETTES.length);
@@ -525,7 +803,7 @@ export default function FractalExperience() {
       ambient.paletteCooldown = PALETTE_COOLDOWN_SECONDS;
     };
     let paletteMutated = false;
-    if (ambient.paletteCooldown <= 0 && Math.random() < 0.45) {
+    if (ambient.paletteCooldown <= 0 && Math.random() < paletteChance) {
       mutatePalette();
       paletteMutated = true;
     }
@@ -538,6 +816,9 @@ export default function FractalExperience() {
       fractalTypeRef.current = nextType;
       setFractalType(nextType);
       alignViewToType(nextType);
+      ambient.typeCooldown = FRACTAL_TYPE_COOLDOWN_SECONDS;
+      const nextScene = pickSceneDefinition(ambient.sceneName);
+      applyScene(nextScene);
       if (nextType === 'julia') {
         const nextSeed = randomJuliaSeed();
         juliaSeedRef.current = nextSeed;
@@ -547,13 +828,18 @@ export default function FractalExperience() {
         updates.push('Fractal reforms as a Mandelbrot bloom');
       }
     };
-    choices.push(toggleFractalType);
+    if (ambient.typeCooldown <= 0) {
+      choices.push(toggleFractalType);
+    }
 
     const mutateVariant = () => {
       const currentVariant = fractalVariantRef.current;
       const options = FRACTAL_VARIANTS.filter((variant) => variant !== currentVariant);
-      const nextVariant = options[Math.floor(Math.random() * options.length)];
+      const nextVariant =
+        options[Math.floor(Math.random() * options.length)];
       fractalVariantRef.current = nextVariant;
+      setFractalVariant(nextVariant);
+      updateFocusTarget(ambient.sceneTargetScale);
       updates.push(`Fractal reforms as ${nextVariant.replace('-', ' ')}`);
       ambient.variantCooldown = VARIANT_COOLDOWN_SECONDS;
     };
@@ -592,7 +878,10 @@ export default function FractalExperience() {
       if (ambient.zoomDirectionCooldown > 0) {
         return;
       }
-      const nextDirection = Math.random() > 0.78 ? 1 : -1;
+      let nextDirection = Math.random() > 0.78 ? 1 : -1;
+      if (nextDirection === 1 && viewRef.current.scale >= MAX_VIEW_SCALE * 0.8) {
+        nextDirection = -1;
+      }
       autoZoomDirectionRef.current = nextDirection;
       setAutoZoomDirection(nextDirection);
       if (nextDirection === 1) {
@@ -635,6 +924,18 @@ export default function FractalExperience() {
     };
     choices.push(mutateAmbientRhythm);
 
+    const refocusDeeper = () => {
+      const ambient = ambientStateRef.current;
+      ambient.sceneTargetScale = clamp(
+        ambient.sceneTargetScale * randomRange(0.12, 0.28),
+        MIN_VIEW_SCALE,
+        MAX_VIEW_SCALE * 0.5,
+      );
+      updateFocusTarget(ambient.sceneTargetScale);
+      updates.push('Zoom focus plunges deeper');
+    };
+    choices.push(refocusDeeper);
+
     const actionsToRun = Math.min(
       choices.length,
       Math.random() > 0.6 ? 2 : 1,
@@ -646,17 +947,24 @@ export default function FractalExperience() {
       action();
     }
 
+    if (!updates.length) {
+      mutateAmbientRhythm();
+    }
+
     if (updates.length) {
       setStatusMessage(updates.join(' • '));
     }
   }, [
+    applyScene,
     alignViewToType,
     setAutoZoomSpeed,
     setAutoZoomDirection,
     setFractalType,
+    setFractalVariant,
     setJuliaSeed,
     setPaletteIndex,
     setStatusMessage,
+    updateFocusTarget,
   ]);
 
   useEffect(() => {
@@ -675,9 +983,10 @@ export default function FractalExperience() {
       ambient.orbitPhase +=
         deltaSeconds * (0.12 + Math.sin(ambient.breathePhase * 0.8) * 0.05);
 
-      const driftIntensity = 0.42 + Math.sin(ambient.breathePhase * 0.9) * 0.14;
+      const driftIntensityBase = 0.42 + Math.sin(ambient.breathePhase * 0.9) * 0.14;
+      const driftIntensity = driftIntensityBase * (1 + ambient.sceneShiftIntensity);
       ambient.driftOffsetX = Math.cos(ambient.driftPhase) * driftIntensity;
-      ambient.driftOffsetY = Math.sin(ambient.driftPhase * 1.18) * driftIntensity;
+      ambient.driftOffsetY = Math.sin(ambient.driftPhase * 1.25) * driftIntensity;
       ambient.paletteCooldown = Math.max(0, ambient.paletteCooldown - deltaSeconds);
       ambient.variantCooldown = Math.max(0, ambient.variantCooldown - deltaSeconds);
       ambient.seedCooldown = Math.max(0, ambient.seedCooldown - deltaSeconds);
@@ -685,12 +994,21 @@ export default function FractalExperience() {
         0,
         ambient.zoomDirectionCooldown - deltaSeconds,
       );
+      ambient.typeCooldown = Math.max(0, ambient.typeCooldown - deltaSeconds);
       if (ambient.zoomOutTimer > 0) {
         ambient.zoomOutTimer = Math.max(0, ambient.zoomOutTimer - deltaSeconds);
         if (ambient.zoomOutTimer === 0 && autoZoomDirectionRef.current === 1) {
           autoZoomDirectionRef.current = -1;
           setAutoZoomDirection(-1);
         }
+      }
+
+      ambient.sceneElapsed += deltaSeconds;
+      const activeScene = SCENE_DEFINITIONS.find((scene) => scene.name === ambient.sceneName);
+      if (!activeScene) {
+        applyScene(pickSceneDefinition(null));
+      } else if (ambient.sceneElapsed >= ambient.sceneDuration) {
+        applyScene(pickSceneDefinition(activeScene.name));
       }
 
       if (fractalTypeRef.current === 'julia') {
@@ -720,10 +1038,12 @@ export default function FractalExperience() {
       }
 
       ambient.mutationElapsed += deltaSeconds;
-      if (ambient.mutationElapsed >= ambient.mutationInterval) {
-      ambient.mutationElapsed = 0;
-      ambient.mutationInterval = randomRange(MUTATION_INTERVAL_MIN, MUTATION_INTERVAL_MAX);
+      if (mutationsEnabledRef.current && ambient.mutationElapsed >= ambient.mutationInterval) {
+        ambient.mutationElapsed = 0;
+        ambient.mutationInterval = randomRange(MUTATION_INTERVAL_MIN, MUTATION_INTERVAL_MAX);
         runFractalMutation();
+      } else if (!mutationsEnabledRef.current) {
+        ambient.mutationElapsed = 0;
       }
 
       rafId = requestAnimationFrame(step);
@@ -734,7 +1054,7 @@ export default function FractalExperience() {
     return () => {
       cancelAnimationFrame(rafId);
     };
-  }, [runFractalMutation]);
+  }, [applyScene, runFractalMutation]);
 
   const handlePaletteShuffle = () => {
     let next = Math.floor(Math.random() * FRACTAL_PALETTES.length);
@@ -750,9 +1070,11 @@ export default function FractalExperience() {
     const next = fractalType === 'mandelbrot' ? 'julia' : 'mandelbrot';
     fractalTypeRef.current = next;
     fractalVariantRef.current = 'classic';
+    setFractalVariant('classic');
     const ambient = ambientStateRef.current;
     ambient.variantCooldown = VARIANT_COOLDOWN_SECONDS;
     ambient.paletteCooldown = PALETTE_COOLDOWN_SECONDS * 0.5;
+    ambient.typeCooldown = FRACTAL_TYPE_COOLDOWN_SECONDS;
     setFractalType(next);
     if (next === 'julia') {
       const nextSeed = randomJuliaSeed();
@@ -760,22 +1082,30 @@ export default function FractalExperience() {
       setJuliaSeed(nextSeed);
     }
     alignViewToType(next);
+    const nextScene = pickSceneDefinition(ambient.sceneName);
+    applyScene(nextScene);
     const variantLabel =
       next === 'mandelbrot' ? formatVariantLabel(fractalVariantRef.current) : 'classic';
-    setStatusMessage(
-      `Exploring the ${next === 'mandelbrot' ? 'Mandelbrot' : 'Julia'} set (${variantLabel})`,
+    setStatusMessage((prev) =>
+      prev
+        ? `${prev} • Exploring the ${next === 'mandelbrot' ? 'Mandelbrot' : 'Julia'} set (${variantLabel})`
+        : `Exploring the ${next === 'mandelbrot' ? 'Mandelbrot' : 'Julia'} set (${variantLabel})`,
     );
   };
 
   const handleFractalReshuffle = () => {
     const nextType = Math.random() > 0.5 ? 'mandelbrot' : 'julia';
     fractalTypeRef.current = nextType;
-    fractalVariantRef.current = FRACTAL_VARIANTS[
-      Math.floor(Math.random() * FRACTAL_VARIANTS.length)
-    ];
+    const nextVariant =
+      nextType === 'mandelbrot'
+        ? FRACTAL_VARIANTS[Math.floor(Math.random() * FRACTAL_VARIANTS.length)]
+        : 'classic';
+    fractalVariantRef.current = nextVariant;
+    setFractalVariant(nextVariant);
     const ambient = ambientStateRef.current;
     ambient.variantCooldown = VARIANT_COOLDOWN_SECONDS;
     ambient.paletteCooldown = PALETTE_COOLDOWN_SECONDS;
+    ambient.typeCooldown = FRACTAL_TYPE_COOLDOWN_SECONDS;
     setFractalType(nextType);
     if (nextType === 'julia') {
       const nextSeed = randomJuliaSeed();
@@ -783,6 +1113,8 @@ export default function FractalExperience() {
       setJuliaSeed(nextSeed);
     }
     alignViewToType(nextType);
+    const nextScene = pickSceneDefinition(ambient.sceneName);
+    applyScene(nextScene);
 
     let nextPalette = Math.floor(Math.random() * FRACTAL_PALETTES.length);
     if (nextPalette === paletteIndex) {
@@ -794,8 +1126,10 @@ export default function FractalExperience() {
     const labelType = nextType === 'mandelbrot' ? 'Mandelbrot' : 'Julia';
     const variantLabel =
       nextType === 'mandelbrot' ? ` (${formatVariantLabel(fractalVariantRef.current)})` : '';
-    setStatusMessage(
-      `Shuffled to the ${labelType}${variantLabel} set with palette ${nextPalette + 1}`,
+    setStatusMessage((prev) =>
+      prev
+        ? `${prev} • Shuffled to the ${labelType}${variantLabel} set with palette ${nextPalette + 1}`
+        : `Shuffled to the ${labelType}${variantLabel} set with palette ${nextPalette + 1}`,
     );
   };
 
@@ -804,21 +1138,54 @@ export default function FractalExperience() {
     juliaSeedRef.current = nextSeed;
     setJuliaSeed(nextSeed);
     alignViewToType('julia', { resetScale: false, recenter: false });
+    updateFocusTarget(viewRef.current.scale);
     setStatusMessage('Generated a new Julia seed');
   };
 
   const handleManualZoom = (direction) => {
     const view = viewRef.current;
     const factor = direction === 'in' ? 0.8 : 1.25;
-    view.scale = Math.max(1e-8, Math.min(8, view.scale * factor));
+    view.scale = clamp(view.scale * factor, MIN_VIEW_SCALE, MAX_VIEW_SCALE);
+    ambientStateRef.current.sceneTargetScale = view.scale;
+    updateFocusTarget(view.scale);
     setStatusMessage(`Manual zoom ${direction === 'in' ? 'in' : 'out'}`);
   };
 
+  const handleResetView = () => {
+    alignViewToType(fractalType);
+    setStatusMessage('View reset to default framing');
+  };
+
   const handleAutoZoomDirectionToggle = () => {
-    const next = autoZoomDirection === -1 ? 1 : -1;
+    let next = autoZoomDirection === -1 ? 1 : -1;
+    if (next === 1 && viewRef.current.scale >= MAX_VIEW_SCALE * 0.8) {
+      next = -1;
+    }
     autoZoomDirectionRef.current = next;
     setAutoZoomDirection(next);
     setStatusMessage(`Auto zoom flowing ${next === -1 ? 'inward' : 'outward'}`);
+  };
+
+  const handleVariantChange = (event) => {
+    const nextVariant = event.target.value;
+    fractalVariantRef.current = nextVariant;
+    setFractalVariant(nextVariant);
+    const ambient = ambientStateRef.current;
+    ambient.variantCooldown = VARIANT_COOLDOWN_SECONDS;
+    updateFocusTarget(ambient.sceneTargetScale);
+    setStatusMessage(`Variant set to ${formatVariantLabel(nextVariant)}`);
+  };
+
+  const handleMutationsToggle = () => {
+    const next = !mutationsEnabledRef.current;
+    mutationsEnabledRef.current = next;
+    setMutationsEnabled(next);
+    const ambient = ambientStateRef.current;
+    ambient.mutationElapsed = 0;
+    if (next) {
+      ambient.mutationInterval = randomRange(MUTATION_INTERVAL_MIN, MUTATION_INTERVAL_MAX);
+    }
+    setStatusMessage(`Auto mutations ${next ? 'resumed' : 'paused'}`);
   };
 
   const handleFullscreenToggle = async () => {
@@ -861,7 +1228,8 @@ export default function FractalExperience() {
   };
 
   const autoZoomPercent = Math.round(autoZoomSpeedToPercent(autoZoomSpeed));
-  const currentVariantLabel = formatVariantLabel(fractalVariantRef.current);
+  const currentVariantLabel =
+    fractalType === 'mandelbrot' ? formatVariantLabel(fractalVariant) : 'classic';
 
   return (
     <section className={`relative isolate overflow-hidden ${isFullscreen ? 'h-screen' : 'px-4 py-12 sm:py-16'}`}>
@@ -946,6 +1314,13 @@ export default function FractalExperience() {
             >
               Zoom Out
             </button>
+            <button
+              type="button"
+              onClick={handleResetView}
+              className={neutralButtonClass}
+            >
+              Reset View
+            </button>
             {fractalType === 'julia' && (
               <button
                 type="button"
@@ -1005,12 +1380,36 @@ export default function FractalExperience() {
             >
               Reverse Flow ({autoZoomDirection === -1 ? 'In' : 'Out'})
             </button>
+            <button
+              type="button"
+              onClick={handleMutationsToggle}
+              className={mutationsEnabled ? accentButtonClass : neutralButtonClass}
+              aria-pressed={mutationsEnabled}
+            >
+              Auto Mutations: {mutationsEnabled ? 'On' : 'Off'}
+            </button>
+            {fractalType === 'mandelbrot' && (
+              <label className="flex items-center gap-2 rounded-full bg-slate-100/10 px-4 py-2 text-xs font-medium uppercase tracking-[0.25em] text-slate-300">
+                Variant
+                <select
+                  value={fractalVariant}
+                  onChange={handleVariantChange}
+                  className="cursor-pointer rounded-full bg-slate-900/70 px-3 py-1 font-sans text-[0.7rem] uppercase tracking-[0.2em] text-slate-200 outline-none"
+                >
+                  {FRACTAL_VARIANTS.map((variant) => (
+                    <option key={variant} value={variant}>
+                      {formatVariantLabel(variant)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <div className="rounded-full bg-slate-100/10 px-4 py-2 font-mono text-xs uppercase tracking-[0.25em] text-slate-300">
               Palette #{paletteIndex + 1}
             </div>
-              <div className="rounded-full bg-slate-100/10 px-4 py-2 font-mono text-xs uppercase tracking-[0.25em] text-slate-300">
-                Variant: {currentVariantLabel}
-              </div>
+            <div className="rounded-full bg-slate-100/10 px-4 py-2 font-mono text-xs uppercase tracking-[0.25em] text-slate-300">
+              Variant: {currentVariantLabel}
+            </div>
           </div>
         </div>
         )}

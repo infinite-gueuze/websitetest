@@ -30,6 +30,7 @@ self.onmessage = (event) => {
     width,
     height,
     fractalType,
+    fractalVariant = 'classic',
     juliaSeed,
     maxIterations,
     view,
@@ -79,8 +80,32 @@ self.onmessage = (event) => {
       let zy2 = zy * zy;
 
       while (zx2 + zy2 <= 4 && iteration < maxIterations) {
-        zy = 2 * zx * zy + cy;
-        zx = zx2 - zy2 + cx;
+        if (fractalType === 'mandelbrot') {
+          if (fractalVariant === 'burning-ship') {
+            const absX = Math.abs(zx);
+            const absY = Math.abs(zy);
+            zy = 2 * absX * absY + cy;
+            zx = absX * absX - absY * absY + cx;
+          } else if (fractalVariant === 'cubic') {
+            const zxTmp = zx;
+            const zyTmp = zy;
+            const zxSq = zxTmp * zxTmp;
+            const zySq = zyTmp * zyTmp;
+            const zxCubed = zxSq * zxTmp - 3 * zxTmp * zySq;
+            const zyCubed = 3 * zxSq * zyTmp - zySq * zyTmp;
+            zx = zxCubed + cx;
+            zy = zyCubed + cy;
+          } else if (fractalVariant === 'perpendicular') {
+            zy = Math.abs(2 * zx * zy) + cy;
+            zx = zx2 - zy2 + cx;
+          } else {
+            zy = 2 * zx * zy + cy;
+            zx = zx2 - zy2 + cx;
+          }
+        } else {
+          zy = 2 * zx * zy + cy;
+          zx = zx2 - zy2 + cx;
+        }
         zx2 = zx * zx;
         zy2 = zy * zy;
         iteration += 1;

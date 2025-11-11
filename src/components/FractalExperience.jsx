@@ -9,10 +9,22 @@ const FRACTAL_PALETTES = [
   ['#f97316', '#fb7185', '#f472b6', '#a855f7', '#22d3ee', '#4ade80'],
 ];
 
-const MIN_RENDER_INTERVAL = 16;
+const MIN_RENDER_INTERVAL = 5;
 const MAX_DEVICE_PIXEL_RATIO = 2;
 const ZOOM_SMOOTHING_FACTOR = 0.85; // Higher = smoother but slower response (0-1)
 const POINTER_SMOOTHING_FACTOR = 0.12; // Frame-rate independent pointer smoothing
+const AUTO_ZOOM_MIN_PERCENT = 1;
+const AUTO_ZOOM_MAX_PERCENT = 100;
+const AUTO_ZOOM_MIN_SPEED = 0.001;
+const AUTO_ZOOM_MAX_SPEED = 0.018;
+const PALETTE_COOLDOWN_SECONDS = 14;
+const VARIANT_COOLDOWN_SECONDS = 18;
+const JULIA_COOLDOWN_SECONDS = 10;
+const MUTATION_INTERVAL_MIN = 9;
+const MUTATION_INTERVAL_MAX = 16;
+const ZOOM_DIRECTION_COOLDOWN_SECONDS = 8;
+const ZOOM_OUT_MAX_SECONDS = 6;
+const FRACTAL_VARIANTS = ['classic', 'cubic', 'burning-ship', 'perpendicular'];
 
 function hexToRgb(hex) {
   const normalized = hex.replace('#', '');
@@ -50,7 +62,7 @@ function relativeLuminance({ r, g, b }) {
   return 0.2126 * R + 0.7152 * G + 0.0722 * B;
 }
 
-function normalizePaletteContrast(lut, minimumRange = 0.65) {
+function normalizePaletteContrast(lut, minimumRange = 0.95, gamma = 0.9) {
   const luminances = lut.map(relativeLuminance);
   const minLum = Math.min(...luminances);
   const maxLum = Math.max(...luminances);
@@ -69,11 +81,24 @@ function normalizePaletteContrast(lut, minimumRange = 0.65) {
       return { r: targetLum * 255, g: targetLum * 255, b: targetLum * 255 };
     }
 
-    const ratio = targetLum / currentLinear;
+    const ratio = targetLum / Math.max(currentLinear, 1e-6);
+    const remap = (channel) =>
+      Math.max(
+        0,
+        Math.min(
+          255,
+          255 *
+            Math.pow(
+              Math.max(0, Math.min(1, ((channel * ratio) / 255))),
+              gamma,
+            ),
+        ),
+      );
+
     return {
-      r: Math.max(0, Math.min(255, color.r * ratio)),
-      g: Math.max(0, Math.min(255, color.g * ratio)),
-      b: Math.max(0, Math.min(255, color.b * ratio)),
+      r: remap(color.r),
+      g: remap(color.g),
+      b: remap(color.b),
     };
   });
 }
@@ -112,6 +137,36 @@ function randomJuliaSeed() {
   };
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function autoZoomSpeedToPercent(speed) {
+  const clamped = clamp(speed, AUTO_ZOOM_MIN_SPEED, AUTO_ZOOM_MAX_SPEED);
+  const ratio =
+    (clamped - AUTO_ZOOM_MIN_SPEED) /
+    (AUTO_ZOOM_MAX_SPEED - AUTO_ZOOM_MIN_SPEED);
+  return (
+    ratio * (AUTO_ZOOM_MAX_PERCENT - AUTO_ZOOM_MIN_PERCENT) +
+    AUTO_ZOOM_MIN_PERCENT
+  );
+}
+
+function percentToAutoZoomSpeed(percent) {
+  const clamped = clamp(percent, AUTO_ZOOM_MIN_PERCENT, AUTO_ZOOM_MAX_PERCENT);
+  const ratio =
+    (clamped - AUTO_ZOOM_MIN_PERCENT) /
+    (AUTO_ZOOM_MAX_PERCENT - AUTO_ZOOM_MIN_PERCENT);
+  return AUTO_ZOOM_MIN_SPEED + ratio * (AUTO_ZOOM_MAX_SPEED - AUTO_ZOOM_MIN_SPEED);
+}
+
+function formatVariantLabel(variant) {
+  if (!variant || variant === 'classic') {
+    return 'classic';
+  }
+  return variant.replace(/-/g, ' ');
+}
+
 export default function FractalExperience() {
   const initialModeRef = useRef(Math.random() > 0.5 ? 'mandelbrot' : 'julia');
 
@@ -120,7 +175,9 @@ export default function FractalExperience() {
   const [paletteIndex, setPaletteIndex] = useState(() =>
     Math.floor(Math.random() * FRACTAL_PALETTES.length),
   );
-  const [autoZoomSpeed, setAutoZoomSpeed] = useState(() => 0.004 + Math.random() * 0.005);
+  const [autoZoomSpeed, setAutoZoomSpeed] = useState(() =>
+    clamp(0.0025 + Math.random() * 0.003, AUTO_ZOOM_MIN_SPEED, AUTO_ZOOM_MAX_SPEED),
+  );
   const [autoZoomDirection, setAutoZoomDirection] = useState(-1);
   const [statusMessage, setStatusMessage] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -164,6 +221,7 @@ export default function FractalExperience() {
   const paletteVersionRef = useRef(0);
   const paletteSentVersionRef = useRef(-1);
   const fractalTypeRef = useRef(fractalType);
+  const fractalVariantRef = useRef('classic');
   const juliaSeedRef = useRef(juliaSeed);
   const autoZoomSpeedRef = useRef(autoZoomSpeed);
   const autoZoomDirectionRef = useRef(autoZoomDirection);
@@ -177,9 +235,19 @@ export default function FractalExperience() {
     driftSpeed: randomRange(0.012, 0.028),
     orbitPhase: Math.random() * Math.PI * 2,
     mutationElapsed: 0,
-    mutationInterval: randomRange(7, 13),
+    mutationInterval: randomRange(MUTATION_INTERVAL_MIN, MUTATION_INTERVAL_MAX),
     driftOffsetX: 0,
     driftOffsetY: 0,
+    juliaPhase: 0,
+    juliaMorphSpeed: randomRange(0.04, 0.08),
+    juliaSource: randomJuliaSeed(),
+    juliaTarget: randomJuliaSeed(),
+    juliaAccumulator: 0,
+    paletteCooldown: 0,
+    variantCooldown: 0,
+    seedCooldown: 0,
+    zoomDirectionCooldown: 0,
+    zoomOutTimer: 0,
   });
 
   useEffect(() => {
@@ -342,8 +410,8 @@ export default function FractalExperience() {
 
       const aspectRatio = height / width;
       const scaledHeight = view.scale * aspectRatio;
-      const pointerOffsetX = (view.pointerX - 0.5) * view.scale * 0.6;
-      const pointerOffsetY = (view.pointerY - 0.5) * scaledHeight * 0.6;
+      const pointerOffsetX = (view.pointerX - 0.5) * view.scale * 0.55;
+      const pointerOffsetY = (view.pointerY - 0.5) * scaledHeight * 0.55;
 
       const driftOffsetX = ambient.driftOffsetX * view.scale * 0.45;
       const driftOffsetY = ambient.driftOffsetY * scaledHeight * 0.45;
@@ -365,6 +433,7 @@ export default function FractalExperience() {
         width,
         height,
         fractalType: fractalTypeRef.current,
+        fractalVariant: fractalVariantRef.current,
         juliaSeed: fractalTypeRef.current === 'julia' ? juliaSeedRef.current : null,
         maxIterations,
         view: {
@@ -395,16 +464,19 @@ export default function FractalExperience() {
       // Apply zoom over elapsed time for frame-rate independence
       const timeBasedMultiplier = Math.pow(perSecondMultiplier, deltaSeconds);
       const rawTargetScale = currentScale * timeBasedMultiplier;
-      const pulseWave = 1 + Math.sin(ambient.pulsePhase) * 0.082;
+      const pulseWave = 1 + Math.sin(ambient.pulsePhase) * 0.11;
       const breatheWave =
-        1 + Math.sin(ambient.breathePhase * 0.9 + ambient.pulsePhase * 0.27) * 0.04;
-      const organicMultiplier = Math.max(0.7, pulseWave * breatheWave);
-      const organicTargetScale = Math.max(1e-8, Math.min(8, rawTargetScale * organicMultiplier));
+        1 + Math.sin(ambient.breathePhase * 0.9 + ambient.pulsePhase * 0.33) * 0.06;
+      const organicMultiplier = Math.max(0.78, pulseWave * breatheWave);
+      const perFrameDamping = 1 - Math.pow(0.92, deltaSeconds * 60);
+      const easedTargetScale =
+        currentScale +
+        (rawTargetScale * organicMultiplier - currentScale) * perFrameDamping;
       
       // Frame-rate independent exponential smoothing
       // Converts fixed-per-frame smoothing to time-based smoothing
       const zoomSmoothing = 1 - Math.pow(ZOOM_SMOOTHING_FACTOR, deltaSeconds * 60);
-      view.scale = currentScale + (organicTargetScale - currentScale) * zoomSmoothing;
+      view.scale = currentScale + (easedTargetScale - currentScale) * zoomSmoothing;
     };
 
     animationRef.current = requestAnimationFrame(renderFrame);
@@ -421,16 +493,41 @@ export default function FractalExperience() {
     };
   }, []);
 
-  const alignViewToType = useCallback((type) => {
-    const view = viewRef.current;
-    view.baseCenterX = type === 'mandelbrot' ? -0.5 : 0;
-    view.baseCenterY = 0;
-    view.scale = 3;
-  }, []);
+  const alignViewToType = useCallback(
+    (type, options = {}) => {
+      const { resetScale = true, recenter = resetScale } = options;
+      const view = viewRef.current;
+      if (recenter) {
+        view.baseCenterX = type === 'mandelbrot' ? -0.5 : 0;
+        view.baseCenterY = 0;
+      }
+
+      if (resetScale) {
+        view.scale = 3;
+        const ambient = ambientStateRef.current;
+        ambient.zoomOutTimer = 0;
+        ambient.zoomDirectionCooldown = ZOOM_DIRECTION_COOLDOWN_SECONDS;
+
+        autoZoomDirectionRef.current = -1;
+        setAutoZoomDirection(-1);
+
+        const nextSpeed = clamp(
+          Math.max(autoZoomSpeedRef.current, 0.0035),
+          AUTO_ZOOM_MIN_SPEED,
+          AUTO_ZOOM_MAX_SPEED,
+        );
+        autoZoomSpeedRef.current = nextSpeed;
+        setAutoZoomSpeed(nextSpeed);
+      }
+    },
+    [setAutoZoomDirection, setAutoZoomSpeed],
+  );
 
   const runFractalMutation = useCallback(() => {
     const updates = [];
     const choices = [];
+
+    const ambient = ambientStateRef.current;
 
     const mutatePalette = () => {
       let nextPalette = Math.floor(Math.random() * FRACTAL_PALETTES.length);
@@ -440,8 +537,16 @@ export default function FractalExperience() {
       paletteIndexRef.current = nextPalette;
       setPaletteIndex(nextPalette);
       updates.push(`Colors mutate (#${nextPalette + 1})`);
+      ambient.paletteCooldown = PALETTE_COOLDOWN_SECONDS;
     };
-    choices.push(mutatePalette);
+    let paletteMutated = false;
+    if (ambient.paletteCooldown <= 0 && Math.random() < 0.45) {
+      mutatePalette();
+      paletteMutated = true;
+    }
+    if (!paletteMutated && ambient.paletteCooldown <= 0) {
+      choices.push(mutatePalette);
+    }
 
     const toggleFractalType = () => {
       const nextType = fractalTypeRef.current === 'mandelbrot' ? 'julia' : 'mandelbrot';
@@ -459,19 +564,39 @@ export default function FractalExperience() {
     };
     choices.push(toggleFractalType);
 
+    const mutateVariant = () => {
+      const currentVariant = fractalVariantRef.current;
+      const options = FRACTAL_VARIANTS.filter((variant) => variant !== currentVariant);
+      const nextVariant = options[Math.floor(Math.random() * options.length)];
+      fractalVariantRef.current = nextVariant;
+      updates.push(`Fractal reforms as ${nextVariant.replace('-', ' ')}`);
+      ambient.variantCooldown = VARIANT_COOLDOWN_SECONDS;
+    };
+    if (fractalTypeRef.current === 'mandelbrot' && ambient.variantCooldown <= 0) {
+      choices.push(mutateVariant);
+    }
+
     if (fractalTypeRef.current === 'julia') {
       const reseedJulia = () => {
+        if (ambient.seedCooldown > 0) {
+          return;
+        }
         const nextSeed = randomJuliaSeed();
         juliaSeedRef.current = nextSeed;
         setJuliaSeed(nextSeed);
-        alignViewToType('julia');
+        alignViewToType('julia', { resetScale: false, recenter: false });
         updates.push('Julia seed mutates and reforms');
+        ambient.seedCooldown = JULIA_COOLDOWN_SECONDS;
       };
-      choices.push(reseedJulia);
+      if (ambient.seedCooldown <= 0 && Math.random() < 0.45) {
+        reseedJulia();
+      } else {
+        choices.push(reseedJulia);
+      }
     }
 
     const mutateZoomSpeed = () => {
-      const nextSpeed = randomRange(0.0035, 0.009);
+      const nextSpeed = clamp(randomRange(0.0018, 0.0042), AUTO_ZOOM_MIN_SPEED, AUTO_ZOOM_MAX_SPEED);
       autoZoomSpeedRef.current = nextSpeed;
       setAutoZoomSpeed(nextSpeed);
       updates.push('Pulse rate shifts');
@@ -479,16 +604,36 @@ export default function FractalExperience() {
     choices.push(mutateZoomSpeed);
 
     const mutateZoomDirection = () => {
-      const nextDirection = Math.random() > 0.5 ? -1 : 1;
+      if (ambient.zoomDirectionCooldown > 0) {
+        return;
+      }
+      const nextDirection = Math.random() > 0.85 ? 1 : -1;
       autoZoomDirectionRef.current = nextDirection;
       setAutoZoomDirection(nextDirection);
+      if (nextDirection === 1) {
+        ambient.zoomOutTimer = ZOOM_OUT_MAX_SECONDS;
+        ambient.zoomDirectionCooldown = ZOOM_OUT_MAX_SECONDS;
+      } else {
+        ambient.zoomOutTimer = 0;
+        ambient.zoomDirectionCooldown = ZOOM_DIRECTION_COOLDOWN_SECONDS;
+
+        const nextSpeed = clamp(
+          Math.max(autoZoomSpeedRef.current, 0.0035),
+          AUTO_ZOOM_MIN_SPEED,
+          AUTO_ZOOM_MAX_SPEED,
+        );
+        autoZoomSpeedRef.current = nextSpeed;
+        setAutoZoomSpeed(nextSpeed);
+      }
       updates.push(nextDirection === -1 ? 'Energy spirals inward' : 'Energy breathes outward');
     };
-    choices.push(mutateZoomDirection);
+    if (ambient.zoomDirectionCooldown <= 0) {
+      choices.push(mutateZoomDirection);
+    }
 
     const shiftCore = () => {
       const view = viewRef.current;
-      const maxShift = view.scale * 0.35;
+      const maxShift = view.scale * 0.28;
       view.baseCenterX += (Math.random() - 0.5) * maxShift;
       view.baseCenterY += (Math.random() - 0.5) * maxShift;
       updates.push('Core drifts into new currents');
@@ -507,7 +652,7 @@ export default function FractalExperience() {
 
     const actionsToRun = Math.min(
       choices.length,
-      Math.random() > 0.6 ? 3 : 2,
+      Math.random() > 0.6 ? 2 : 1,
     );
 
     for (let i = 0; i < actionsToRun && choices.length; i += 1) {
@@ -545,20 +690,61 @@ export default function FractalExperience() {
       ambient.orbitPhase +=
         deltaSeconds * (0.12 + Math.sin(ambient.breathePhase * 0.8) * 0.05);
 
-      const orbitIntensity = 0.22 + Math.sin(ambient.breathePhase) * 0.07;
+      const orbitIntensity = 0.28 + Math.sin(ambient.breathePhase) * 0.11;
       if (!pointerRef.current.active) {
         pointerRef.current.targetX = 0.5 + Math.cos(ambient.orbitPhase) * orbitIntensity;
-        pointerRef.current.targetY = 0.5 + Math.sin(ambient.orbitPhase * 1.3) * orbitIntensity;
+        pointerRef.current.targetY =
+          0.5 + Math.sin(ambient.orbitPhase * 1.35) * orbitIntensity;
       }
 
-      const driftIntensity = 0.35 + Math.sin(ambient.breathePhase * 0.9) * 0.12;
+      const driftIntensity = 0.42 + Math.sin(ambient.breathePhase * 0.9) * 0.14;
       ambient.driftOffsetX = Math.cos(ambient.driftPhase) * driftIntensity;
       ambient.driftOffsetY = Math.sin(ambient.driftPhase * 1.18) * driftIntensity;
+      ambient.paletteCooldown = Math.max(0, ambient.paletteCooldown - deltaSeconds);
+      ambient.variantCooldown = Math.max(0, ambient.variantCooldown - deltaSeconds);
+      ambient.seedCooldown = Math.max(0, ambient.seedCooldown - deltaSeconds);
+      ambient.zoomDirectionCooldown = Math.max(
+        0,
+        ambient.zoomDirectionCooldown - deltaSeconds,
+      );
+      if (ambient.zoomOutTimer > 0) {
+        ambient.zoomOutTimer = Math.max(0, ambient.zoomOutTimer - deltaSeconds);
+        if (ambient.zoomOutTimer === 0 && autoZoomDirectionRef.current === 1) {
+          autoZoomDirectionRef.current = -1;
+          setAutoZoomDirection(-1);
+        }
+      }
+
+      if (fractalTypeRef.current === 'julia') {
+        ambient.juliaPhase += deltaSeconds * ambient.juliaMorphSpeed;
+        if (ambient.juliaPhase >= 1) {
+          ambient.juliaPhase -= 1;
+          ambient.juliaSource = ambient.juliaTarget;
+          ambient.juliaTarget = randomJuliaSeed();
+          ambient.juliaMorphSpeed = randomRange(0.04, 0.09);
+        }
+
+        const morphT = easeInOut(ambient.juliaPhase);
+        const nextSeed = {
+          x: lerp(ambient.juliaSource.x, ambient.juliaTarget.x, morphT),
+          y: lerp(ambient.juliaSource.y, ambient.juliaTarget.y, morphT),
+        };
+        juliaSeedRef.current = nextSeed;
+
+        ambient.juliaAccumulator += deltaSeconds;
+        if (ambient.juliaAccumulator >= 0.14) {
+          ambient.juliaAccumulator = 0;
+          setJuliaSeed(nextSeed);
+        }
+      } else {
+        ambient.juliaPhase = 0;
+        ambient.juliaAccumulator = 0;
+      }
 
       ambient.mutationElapsed += deltaSeconds;
       if (ambient.mutationElapsed >= ambient.mutationInterval) {
-        ambient.mutationElapsed = 0;
-        ambient.mutationInterval = randomRange(6, 12);
+      ambient.mutationElapsed = 0;
+      ambient.mutationInterval = randomRange(MUTATION_INTERVAL_MIN, MUTATION_INTERVAL_MAX);
         runFractalMutation();
       }
 
@@ -585,6 +771,10 @@ export default function FractalExperience() {
   const handleFractalToggle = () => {
     const next = fractalType === 'mandelbrot' ? 'julia' : 'mandelbrot';
     fractalTypeRef.current = next;
+    fractalVariantRef.current = 'classic';
+    const ambient = ambientStateRef.current;
+    ambient.variantCooldown = VARIANT_COOLDOWN_SECONDS;
+    ambient.paletteCooldown = PALETTE_COOLDOWN_SECONDS * 0.5;
     setFractalType(next);
     if (next === 'julia') {
       const nextSeed = randomJuliaSeed();
@@ -592,12 +782,22 @@ export default function FractalExperience() {
       setJuliaSeed(nextSeed);
     }
     alignViewToType(next);
-    setStatusMessage(`Exploring the ${next === 'mandelbrot' ? 'Mandelbrot' : 'Julia'} set`);
+    const variantLabel =
+      next === 'mandelbrot' ? formatVariantLabel(fractalVariantRef.current) : 'classic';
+    setStatusMessage(
+      `Exploring the ${next === 'mandelbrot' ? 'Mandelbrot' : 'Julia'} set (${variantLabel})`,
+    );
   };
 
   const handleFractalReshuffle = () => {
     const nextType = Math.random() > 0.5 ? 'mandelbrot' : 'julia';
     fractalTypeRef.current = nextType;
+    fractalVariantRef.current = FRACTAL_VARIANTS[
+      Math.floor(Math.random() * FRACTAL_VARIANTS.length)
+    ];
+    const ambient = ambientStateRef.current;
+    ambient.variantCooldown = VARIANT_COOLDOWN_SECONDS;
+    ambient.paletteCooldown = PALETTE_COOLDOWN_SECONDS;
     setFractalType(nextType);
     if (nextType === 'julia') {
       const nextSeed = randomJuliaSeed();
@@ -614,14 +814,18 @@ export default function FractalExperience() {
     setPaletteIndex(nextPalette);
 
     const labelType = nextType === 'mandelbrot' ? 'Mandelbrot' : 'Julia';
-    setStatusMessage(`Shuffled to the ${labelType} set with palette ${nextPalette + 1}`);
+    const variantLabel =
+      nextType === 'mandelbrot' ? ` (${formatVariantLabel(fractalVariantRef.current)})` : '';
+    setStatusMessage(
+      `Shuffled to the ${labelType}${variantLabel} set with palette ${nextPalette + 1}`,
+    );
   };
 
   const handleJuliaReseed = () => {
     const nextSeed = randomJuliaSeed();
     juliaSeedRef.current = nextSeed;
     setJuliaSeed(nextSeed);
-    alignViewToType('julia');
+    alignViewToType('julia', { resetScale: false, recenter: false });
     setStatusMessage('Generated a new Julia seed');
   };
 
@@ -700,7 +904,8 @@ export default function FractalExperience() {
     }
   };
 
-  const autoZoomValue = Math.round(autoZoomSpeed * 1000);
+  const autoZoomPercent = Math.round(autoZoomSpeedToPercent(autoZoomSpeed));
+  const currentVariantLabel = formatVariantLabel(fractalVariantRef.current);
 
   return (
     <section className={`relative isolate overflow-hidden ${isFullscreen ? 'h-screen' : 'px-4 py-12 sm:py-16'}`}>
@@ -824,20 +1029,21 @@ export default function FractalExperience() {
             <span className="font-medium text-slate-100">Auto Zoom Speed</span>
             <input
               type="range"
-              min="0"
-              max="18"
-              value={autoZoomValue}
+              min={AUTO_ZOOM_MIN_PERCENT}
+              max={AUTO_ZOOM_MAX_PERCENT}
+              value={autoZoomPercent}
               onChange={(event) => {
-                const nextSpeed = Number(event.target.value) / 1000;
+                const nextPercent = Number(event.target.value);
+                const nextSpeed = percentToAutoZoomSpeed(nextPercent);
                 autoZoomSpeedRef.current = nextSpeed;
                 setAutoZoomSpeed(nextSpeed);
               }}
-              aria-valuetext={`${autoZoomValue} per mille`}
+              aria-valuetext={`${autoZoomPercent}%`}
               className="h-1 flex-1 cursor-ew-resize appearance-none rounded-full bg-slate-700 accent-fuchsia-500"
             />
             <span className="w-12 text-right font-mono text-xs text-slate-400">
-              {autoZoomValue}
-              ‰
+              {autoZoomPercent}
+              %
             </span>
           </label>
 
@@ -853,6 +1059,9 @@ export default function FractalExperience() {
             <div className="rounded-full bg-slate-100/10 px-4 py-2 font-mono text-xs uppercase tracking-[0.25em] text-slate-300">
               Palette #{paletteIndex + 1}
             </div>
+              <div className="rounded-full bg-slate-100/10 px-4 py-2 font-mono text-xs uppercase tracking-[0.25em] text-slate-300">
+                Variant: {currentVariantLabel}
+              </div>
           </div>
         </div>
         )}

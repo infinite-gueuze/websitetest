@@ -1,29 +1,40 @@
-# React + Vite
+# Fractal Experience
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Immersive Mandelbrot and Julia set explorer built with React, Vite, and a modular fractal engine. The UI exposes real‑time controls for palettes, zoom behaviour, and curated scene presets while the engine keeps rendering work off the main thread.
 
-Currently, two official plugins are available:
+## Getting Started
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+```bash
+npm install          # install dependencies
+npm run dev          # start the local dev server
+npm run build        # create a production build
+npm run preview      # serve the production build locally
+```
 
-## React Compiler
+## Quality & Tooling
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- `npm run lint` – ESLint with the project rules
+- `npm run test` – Vitest unit tests (hooks, utilities, engine)
+- `npm run perf:fractal` – lightweight CLI harness for profiling presets once the engine is available in Node (see script output for manual steps)
 
-## Expanding the ESLint configuration
+## Architecture Highlights
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- `src/hooks/useFractalControls.js` orchestrates UI state, ambient scene logic, preset sequencing, and exposes memoised handlers for the components.
+- `src/hooks/useFractalEngine.js` owns the lifecycle of the rendering engine (canvas sizing, worker messages, telemetry feeds).
+- `src/lib/fractalEngine.js` encapsulates the worker-backed rendering loop with a clean imperative API (`setPalette`, `updateSettings`, `applyPreset`, `destroy`).
+- Presentation components live under `src/components/fractal/` while shared UI primitives stay in `src/components/ui/`.
+- Configuration for palettes, variants, focus targets, and scene presets is centralised in `src/config/fractalSettings.js`.
 
-## Manual Test Results
+An extended breakdown of the modules and data flow is available in `docs/fractal-architecture.md`.
 
-Desktop (Chrome 119) and simulated touch input (Chrome DevTools device toolbar) were used to verify the fractal explorer controls after the performance and UX updates.
+## Customising the Visuals
 
-- Randomize Colors — PASS (desktop click & touch tap)
-- Switch Mandelbrot/Julia — PASS (desktop & touch)
-- Shuffle Everything — PASS (desktop & touch)
-- Zoom In / Zoom Out — PASS (desktop & touch)
-- New Julia Seed (Julia mode only) — PASS (desktop & touch)
-- Auto Zoom Speed slider — PASS (keyboard, pointer drag, touch drag)
-- Reverse Flow toggle — PASS (desktop & touch)
-- Pointer hover/touch focus warp — PASS (desktop hover, touch drag)
+- Adjust or add presets by editing `SCENE_DEFINITIONS` inside `src/config/fractalSettings.js`. New entries automatically surface in the Presets picker.
+- Tailor palette options under `FRACTAL_PALETTES`; the LUT builder normalises luminance for consistent contrast.
+- Common gradients and glows live in `src/styles/fractal.css` to keep component markup tidy.
+- Reusable button/toggle variants are defined in `src/components/ui/Button.jsx` & `Toggle.jsx`; extend or create new variants there when tweaking the control panel.
+
+## Performance Notes
+
+Baseline metrics and future regression comparisons should be recorded in `docs/performance-baseline.md`. After large rendering changes, run the profiling harness or capture a Chrome performance trace per preset and append the results to the table.
+

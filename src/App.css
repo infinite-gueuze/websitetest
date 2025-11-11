@@ -40,3 +40,56 @@
 .read-the-docs {
   color: #888;
 }
+
+.interactive-button {
+  position: relative;
+  overflow: hidden;
+  transition: transform 200ms ease, box-shadow 200ms ease, background-color 200ms ease;
+}
+
+.interactive-button::after {
+  content: '';
+  position: absolute;
+  inset: -60%;
+  background:
+    radial-gradient(circle at 25% 25%, rgba(244, 63, 94, 0.28), transparent 60%),
+    radial-gradient(circle at 70% 70%, rgba(34, 211, 238, 0.32), transparent 65%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+}
+
+.interactive-button:hover::after,
+.interactive-button:focus-visible::after {
+  opacity: 1;
+}
+
+@keyframes glowOrbit {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  50% {
+    transform: rotate(180deg) scale(1.05);
+  }
+  100% {
+    transform: rotate(360deg) scale(1);
+  }
+}
+
+.animate-glow-orbit {
+  animation: glowOrbit 24s ease-in-out infinite;
+}
+
+@keyframes floatGradient {
+  0%,
+  100% {
+    transform: translate3d(0, -3%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, 3%, 0) scale(1.05);
+  }
+}
+
+.animate-float-gradient {
+  animation: floatGradient 18s ease-in-out infinite;
+}

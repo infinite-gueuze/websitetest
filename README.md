@@ -11,6 +11,15 @@ npm run build        # create a production build
 npm run preview      # serve the production build locally
 ```
 
+### AI Integration Setup
+
+- Copy `env.example` to `.env.local` (or `.env`) and fill in the AI credentials:
+  ```bash
+  cp env.example .env.local
+  ```
+- Set `VITE_AI_API_KEY` to your service account key and adjust the model or provider if you are not using OpenAI.
+- Restart the dev server after updating environment variables so Vite picks up the new configuration.
+
 ## Quality & Tooling
 
 - `npm run lint` – ESLint with the project rules

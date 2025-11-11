@@ -30,6 +30,12 @@ export default function FractalControlPanel({
   onVariantChange,
   onAutoZoomChange,
   onPresetSelect,
+  aiEnabled,
+  aiLoading,
+  aiStatus,
+  aiLastSource,
+  onAiToggle,
+  onAiRefresh,
 }) {
   return (
     <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
@@ -78,6 +84,12 @@ export default function FractalControlPanel({
           <Toggle pressed={mutationsEnabled} onClick={onMutationsToggle}>
             Auto Mutations: {mutationsEnabled ? 'On' : 'Off'}
           </Toggle>
+          <Toggle pressed={aiEnabled} onClick={onAiToggle}>
+            AI Guide: {aiEnabled ? 'On' : 'Off'}
+          </Toggle>
+          <Button onClick={onAiRefresh} disabled={!aiEnabled || aiLoading}>
+            {aiLoading ? 'AI Thinking…' : 'Refresh with AI'}
+          </Button>
 
           {fractalType === 'mandelbrot' && (
             <label className="flex items-center gap-2 rounded-full bg-slate-100/10 px-4 py-2 text-xs font-medium uppercase tracking-[0.25em] text-slate-300">
@@ -104,6 +116,11 @@ export default function FractalControlPanel({
           <div className="rounded-full bg-slate-100/10 px-4 py-2 font-mono text-xs uppercase tracking-[0.25em] text-slate-300">
             Variant: {currentVariantLabel}
           </div>
+          {aiEnabled && (
+            <div className="rounded-full bg-emerald-400/10 px-4 py-2 font-mono text-xs uppercase tracking-[0.25em] text-emerald-300">
+              AI {aiLastSource === 'fallback' ? 'Fallback' : 'Active'} • {aiStatus}
+            </div>
+          )}
         </div>
 
         <PresetSelector presets={presetOptions} activePreset={activePreset} onSelect={onPresetSelect} />

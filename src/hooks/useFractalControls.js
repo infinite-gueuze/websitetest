@@ -615,6 +615,25 @@ export function useFractalControls() {
     setStatusMessage(`Palette ${next + 1} loaded`);
   }, [paletteIndex]);
 
+  const handlePaletteSet = useCallback(
+    (nextIndex, { announce = true } = {}) => {
+      if (!Number.isFinite(nextIndex)) {
+        return;
+      }
+      const paletteCount = FRACTAL_PALETTES.length;
+      const normalized = ((Math.round(nextIndex) % paletteCount) + paletteCount) % paletteCount;
+      if (normalized === paletteIndexRef.current) {
+        return;
+      }
+      paletteIndexRef.current = normalized;
+      setPaletteIndex(normalized);
+      if (announce) {
+        setStatusMessage(`Palette ${normalized + 1} tuned`);
+      }
+    },
+    [],
+  );
+
   const handleFractalToggle = useCallback(() => {
     const next = fractalType === 'mandelbrot' ? 'julia' : 'mandelbrot';
     fractalTypeRef.current = next;
@@ -691,6 +710,22 @@ export function useFractalControls() {
     setStatusMessage('Generated a new Julia seed');
   }, [alignViewToType, updateFocusTarget]);
 
+  const handleJuliaSeedSet = useCallback(
+    (seed, { announce = true } = {}) => {
+      if (!seed || !Number.isFinite(seed.x) || !Number.isFinite(seed.y)) {
+        return;
+      }
+      juliaSeedRef.current = { x: seed.x, y: seed.y };
+      setJuliaSeed(juliaSeedRef.current);
+      alignViewToType('julia', { resetScale: false, recenter: false });
+      updateFocusTarget(viewRef.current.scale);
+      if (announce) {
+        setStatusMessage('Julia seed tuned');
+      }
+    },
+    [alignViewToType, updateFocusTarget],
+  );
+
   const handleManualZoom = useCallback((direction) => {
     const view = viewRef.current;
     const factor = direction === 'in' ? 0.8 : 1.25;
@@ -735,6 +770,12 @@ export function useFractalControls() {
       ambient.mutationInterval = randomRange(MUTATION_INTERVAL_MIN, MUTATION_INTERVAL_MAX);
     }
     setStatusMessage(`Auto mutations ${next ? 'resumed' : 'paused'}`);
+  }, []);
+
+  const handleStatusMessage = useCallback((message) => {
+    if (typeof message === 'string' && message.trim().length > 0) {
+      setStatusMessage(message.trim());
+    }
   }, []);
 
   const handlePresetSelect = useCallback(
@@ -913,9 +954,11 @@ export function useFractalControls() {
     },
     handlers: {
       handlePaletteShuffle,
+      handlePaletteSet,
       handleFractalToggle,
       handleFractalReshuffle,
       handleJuliaReseed,
+      handleJuliaSeedSet,
       handleManualZoom,
       handleResetView,
       handleAutoZoomDirectionToggle,
@@ -924,6 +967,7 @@ export function useFractalControls() {
       handleAutoZoomSliderChange,
       handleFullscreenToggle,
       handlePresetSelect,
+      handleStatusMessage,
     },
     engine: {
       computeRenderPayload,

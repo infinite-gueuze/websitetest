@@ -1,5 +1,7 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import useFractalControls from '../hooks/useFractalControls.js';
 import useFractalEngine from '../hooks/useFractalEngine.js';
+import useAiFractalCurator from '../hooks/useAiFractalCurator.js';
 import FractalCanvas from './fractal/FractalCanvas.jsx';
 import FractalHeader from './fractal/FractalHeader.jsx';
 import FractalControlPanel from './fractal/FractalControlPanel.jsx';
@@ -26,6 +28,7 @@ export default function FractalExperience() {
     fractalType,
     fractalVariant,
     paletteIndex,
+    juliaSeed,
     autoZoomDirection,
     autoZoomPercent,
     isFullscreen,
@@ -47,9 +50,11 @@ export default function FractalExperience() {
 
   const {
     handlePaletteShuffle,
+    handlePaletteSet,
     handleFractalToggle,
     handleFractalReshuffle,
     handleJuliaReseed,
+    handleJuliaSeedSet,
     handleManualZoom,
     handleResetView,
     handleAutoZoomDirectionToggle,
@@ -58,6 +63,7 @@ export default function FractalExperience() {
     handleAutoZoomSliderChange,
     handleFullscreenToggle,
     handlePresetSelect,
+    handleStatusMessage,
   } = handlers;
 
   useFractalEngine({
@@ -67,6 +73,147 @@ export default function FractalExperience() {
     minRenderInterval: MIN_RENDER_INTERVAL,
     maxDevicePixelRatio: MAX_DEVICE_PIXEL_RATIO,
   });
+
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const lastDirectiveHashRef = useRef(null);
+
+  const aiState = useMemo(
+    () => ({
+      fractalType,
+      fractalVariant,
+      paletteIndex,
+      juliaSeed,
+      autoZoomPercent,
+      autoZoomDirection,
+      mutationsEnabled,
+      activePreset,
+      statusMessage,
+    }),
+    [
+      fractalType,
+      fractalVariant,
+      paletteIndex,
+      juliaSeed,
+      autoZoomPercent,
+      autoZoomDirection,
+      mutationsEnabled,
+      activePreset,
+      statusMessage,
+    ],
+  );
+
+  const {
+    isLoading: aiLoading,
+    error: aiError,
+    cadenceMs: aiCadenceMs,
+    lastDirective,
+    lastSource: aiLastSource,
+    requestSuggestion,
+  } = useAiFractalCurator({
+    isEnabled: aiEnabled,
+    currentState: aiState,
+  });
+
+  useEffect(() => {
+    if (!aiEnabled || !lastDirective) {
+      return;
+    }
+
+    const hash = JSON.stringify(lastDirective);
+    if (hash === lastDirectiveHashRef.current) {
+      return;
+    }
+    lastDirectiveHashRef.current = hash;
+
+    if (lastDirective.fractalType && lastDirective.fractalType !== fractalType) {
+      handleFractalToggle();
+    }
+
+    if (
+      Number.isFinite(lastDirective.paletteIndex) &&
+      lastDirective.paletteIndex !== paletteIndex
+    ) {
+      handlePaletteSet(lastDirective.paletteIndex, { announce: false });
+    }
+
+    if (
+      lastDirective.variant &&
+      lastDirective.variant !== fractalVariant &&
+      fractalType === 'mandelbrot'
+    ) {
+      handleVariantChange({ target: { value: lastDirective.variant } });
+    }
+
+    if (
+      Number.isFinite(lastDirective.autoZoomPercent) &&
+      lastDirective.autoZoomPercent !== autoZoomPercent
+    ) {
+      handleAutoZoomSliderChange({ target: { value: `${lastDirective.autoZoomPercent}` } });
+    }
+
+    if (
+      lastDirective.autoZoomDirection &&
+      lastDirective.autoZoomDirection !== autoZoomDirection
+    ) {
+      handleAutoZoomDirectionToggle();
+    }
+
+    if (
+      typeof lastDirective.mutationsEnabled === 'boolean' &&
+      lastDirective.mutationsEnabled !== mutationsEnabled
+    ) {
+      handleMutationsToggle();
+    }
+
+    if (lastDirective.preset && lastDirective.preset !== activePreset) {
+      handlePresetSelect(lastDirective.preset);
+    }
+
+    if (lastDirective.juliaSeed && fractalType === 'julia') {
+      handleJuliaSeedSet(lastDirective.juliaSeed, { announce: false });
+    }
+
+    if (lastDirective.statusMessage) {
+      handleStatusMessage(lastDirective.statusMessage);
+    }
+  }, [
+    activePreset,
+    aiEnabled,
+    autoZoomDirection,
+    autoZoomPercent,
+    fractalType,
+    fractalVariant,
+    handleAutoZoomDirectionToggle,
+    handleAutoZoomSliderChange,
+    handleFractalToggle,
+    handleJuliaSeedSet,
+    handleMutationsToggle,
+    handlePaletteSet,
+    handlePresetSelect,
+    handleStatusMessage,
+    handleVariantChange,
+    lastDirective,
+    mutationsEnabled,
+    paletteIndex,
+  ]);
+
+  const aiStatus = useMemo(() => {
+    if (!aiEnabled) return 'Paused';
+    if (aiLoading) return 'Curating';
+    if (aiError) return 'Fallback ready';
+    if (aiCadenceMs) {
+      return `Next ${(aiCadenceMs / 1000).toFixed(0)}s`;
+    }
+    return 'Ready';
+  }, [aiEnabled, aiLoading, aiError, aiCadenceMs]);
+
+  const handleAiToggle = useCallback(() => {
+    setAiEnabled((prev) => !prev);
+  }, []);
+
+  const handleAiRefresh = useCallback(() => {
+    requestSuggestion({ forceSchedule: true }).catch(() => {});
+  }, [requestSuggestion]);
 
   return (
     <section className={`relative isolate overflow-hidden ${isFullscreen ? 'h-screen' : 'px-4 py-12 sm:py-16'}`}>
@@ -113,6 +260,12 @@ export default function FractalExperience() {
               onVariantChange={handleVariantChange}
               onAutoZoomChange={handleAutoZoomSliderChange}
               onPresetSelect={handlePresetSelect}
+              aiEnabled={aiEnabled}
+              aiLoading={aiLoading}
+              aiStatus={aiStatus}
+              aiLastSource={aiLastSource}
+              onAiToggle={handleAiToggle}
+              onAiRefresh={handleAiRefresh}
             />
           </>
         )}

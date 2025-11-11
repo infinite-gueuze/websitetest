@@ -41,5 +41,19 @@ describe('useFractalControls', () => {
     });
     expect(result.current.activePreset).toBe(firstPreset.name);
   });
+
+  it('supports direct palette and Julia seed updates', () => {
+    const { result } = renderHook(() => useFractalControls());
+
+    act(() => {
+      result.current.handlers.handlePaletteSet(2);
+    });
+    expect(result.current.paletteIndex).toBe(2);
+
+    act(() => {
+      result.current.handlers.handleJuliaSeedSet({ x: 0.18, y: -0.42 });
+    });
+    expect(result.current.juliaSeed).toEqual({ x: 0.18, y: -0.42 });
+  });
 });
 

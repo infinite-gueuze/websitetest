@@ -12,18 +12,17 @@ const FRACTAL_PALETTES = [
 const MIN_RENDER_INTERVAL = 5;
 const MAX_DEVICE_PIXEL_RATIO = 2;
 const ZOOM_SMOOTHING_FACTOR = 0.85; // Higher = smoother but slower response (0-1)
-const POINTER_SMOOTHING_FACTOR = 0.12; // Frame-rate independent pointer smoothing
 const AUTO_ZOOM_MIN_PERCENT = 1;
 const AUTO_ZOOM_MAX_PERCENT = 100;
 const AUTO_ZOOM_MIN_SPEED = 0.001;
 const AUTO_ZOOM_MAX_SPEED = 0.018;
-const PALETTE_COOLDOWN_SECONDS = 14;
-const VARIANT_COOLDOWN_SECONDS = 18;
-const JULIA_COOLDOWN_SECONDS = 10;
-const MUTATION_INTERVAL_MIN = 9;
-const MUTATION_INTERVAL_MAX = 16;
-const ZOOM_DIRECTION_COOLDOWN_SECONDS = 8;
-const ZOOM_OUT_MAX_SECONDS = 6;
+const PALETTE_COOLDOWN_SECONDS = 10;
+const VARIANT_COOLDOWN_SECONDS = 14;
+const JULIA_COOLDOWN_SECONDS = 8;
+const MUTATION_INTERVAL_MIN = 7;
+const MUTATION_INTERVAL_MAX = 13;
+const ZOOM_DIRECTION_COOLDOWN_SECONDS = 6;
+const ZOOM_OUT_MAX_SECONDS = 4;
 const FRACTAL_VARIANTS = ['classic', 'cubic', 'burning-ship', 'perpendicular'];
 
 function hexToRgb(hex) {
@@ -185,18 +184,10 @@ export default function FractalExperience() {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const animationRef = useRef(null);
-  const pointerRef = useRef({
-    targetX: 0.5,
-    targetY: 0.5,
-    active: false,
-  });
-
   const viewRef = useRef({
     baseCenterX: initialModeRef.current === 'mandelbrot' ? -0.5 : 0,
     baseCenterY: 0,
     scale: 3,
-    pointerX: 0.5,
-    pointerY: 0.5,
   });
 
   const paletteData = useMemo(() => {
@@ -400,18 +391,12 @@ export default function FractalExperience() {
       }
 
       const view = viewRef.current;
-      const pointerTarget = pointerRef.current;
       const ambient = ambientStateRef.current;
-
-      // Frame-rate independent pointer smoothing for buttery smooth movement
-      const pointerSmoothing = 1 - Math.pow(1 - POINTER_SMOOTHING_FACTOR, deltaSeconds * 60);
-      view.pointerX += (pointerTarget.targetX - view.pointerX) * pointerSmoothing;
-      view.pointerY += (pointerTarget.targetY - view.pointerY) * pointerSmoothing;
 
       const aspectRatio = height / width;
       const scaledHeight = view.scale * aspectRatio;
-      const pointerOffsetX = (view.pointerX - 0.5) * view.scale * 0.55;
-      const pointerOffsetY = (view.pointerY - 0.5) * scaledHeight * 0.55;
+      const pointerOffsetX = 0;
+      const pointerOffsetY = 0;
 
       const driftOffsetX = ambient.driftOffsetX * view.scale * 0.45;
       const driftOffsetY = ambient.driftOffsetY * scaledHeight * 0.45;
@@ -512,7 +497,7 @@ export default function FractalExperience() {
         setAutoZoomDirection(-1);
 
         const nextSpeed = clamp(
-          Math.max(autoZoomSpeedRef.current, 0.0035),
+          Math.max(autoZoomSpeedRef.current, 0.006),
           AUTO_ZOOM_MIN_SPEED,
           AUTO_ZOOM_MAX_SPEED,
         );
@@ -596,7 +581,7 @@ export default function FractalExperience() {
     }
 
     const mutateZoomSpeed = () => {
-      const nextSpeed = clamp(randomRange(0.0018, 0.0042), AUTO_ZOOM_MIN_SPEED, AUTO_ZOOM_MAX_SPEED);
+      const nextSpeed = clamp(randomRange(0.0032, 0.007), AUTO_ZOOM_MIN_SPEED, AUTO_ZOOM_MAX_SPEED);
       autoZoomSpeedRef.current = nextSpeed;
       setAutoZoomSpeed(nextSpeed);
       updates.push('Pulse rate shifts');
@@ -607,7 +592,7 @@ export default function FractalExperience() {
       if (ambient.zoomDirectionCooldown > 0) {
         return;
       }
-      const nextDirection = Math.random() > 0.85 ? 1 : -1;
+      const nextDirection = Math.random() > 0.78 ? 1 : -1;
       autoZoomDirectionRef.current = nextDirection;
       setAutoZoomDirection(nextDirection);
       if (nextDirection === 1) {
@@ -618,7 +603,7 @@ export default function FractalExperience() {
         ambient.zoomDirectionCooldown = ZOOM_DIRECTION_COOLDOWN_SECONDS;
 
         const nextSpeed = clamp(
-          Math.max(autoZoomSpeedRef.current, 0.0035),
+          Math.max(autoZoomSpeedRef.current, 0.006),
           AUTO_ZOOM_MIN_SPEED,
           AUTO_ZOOM_MAX_SPEED,
         );
@@ -689,13 +674,6 @@ export default function FractalExperience() {
       ambient.driftPhase += deltaSeconds * ambient.driftSpeed;
       ambient.orbitPhase +=
         deltaSeconds * (0.12 + Math.sin(ambient.breathePhase * 0.8) * 0.05);
-
-      const orbitIntensity = 0.28 + Math.sin(ambient.breathePhase) * 0.11;
-      if (!pointerRef.current.active) {
-        pointerRef.current.targetX = 0.5 + Math.cos(ambient.orbitPhase) * orbitIntensity;
-        pointerRef.current.targetY =
-          0.5 + Math.sin(ambient.orbitPhase * 1.35) * orbitIntensity;
-      }
 
       const driftIntensity = 0.42 + Math.sin(ambient.breathePhase * 0.9) * 0.14;
       ambient.driftOffsetX = Math.cos(ambient.driftPhase) * driftIntensity;
@@ -843,28 +821,6 @@ export default function FractalExperience() {
     setStatusMessage(`Auto zoom flowing ${next === -1 ? 'inward' : 'outward'}`);
   };
 
-  const handlePointer = (event) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    pointerRef.current.targetX = (event.clientX - rect.left) / rect.width;
-    pointerRef.current.targetY = (event.clientY - rect.top) / rect.height;
-    pointerRef.current.active = true;
-  };
-
-  const handlePointerLeave = () => {
-    pointerRef.current.targetX = 0.5;
-    pointerRef.current.targetY = 0.5;
-    pointerRef.current.active = false;
-  };
-
-  const handleTouch = (event) => {
-    const touch = event.touches[0];
-    if (!touch) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    pointerRef.current.targetX = (touch.clientX - rect.left) / rect.width;
-    pointerRef.current.targetY = (touch.clientY - rect.top) / rect.height;
-    pointerRef.current.active = true;
-  };
-
   const handleFullscreenToggle = async () => {
     const container = containerRef.current;
     if (!container) return;
@@ -922,15 +878,9 @@ export default function FractalExperience() {
         <div className={`group relative w-full overflow-hidden rounded-3xl border border-slate-700/50 bg-slate-950/80 shadow-inner ${isFullscreen ? 'h-full' : ''}`}>
           <canvas
             ref={canvasRef}
-            className={`block w-full cursor-crosshair select-none rounded-3xl bg-slate-950/80 ${isFullscreen ? 'h-full' : '[aspect-ratio:3/2]'} transition-transform duration-700 ease-out group-hover:scale-[1.01]`}
+            className={`block w-full select-none rounded-3xl bg-slate-950/80 ${isFullscreen ? 'h-full' : '[aspect-ratio:3/2]'} transition-transform duration-700 ease-out group-hover:scale-[1.01]`}
             role="img"
             aria-label={`Animated ${fractalType === 'mandelbrot' ? 'Mandelbrot' : 'Julia'} fractal visualization`}
-            onMouseEnter={handlePointer}
-            onMouseMove={handlePointer}
-            onMouseLeave={handlePointerLeave}
-            onTouchStart={handleTouch}
-            onTouchMove={handleTouch}
-            onTouchEnd={handlePointerLeave}
           />
           <div className="pointer-events-none absolute inset-0 overflow-hidden">
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(244,63,94,0.12),transparent_55%),radial-gradient(circle_at_70%_80%,rgba(34,211,238,0.1),transparent_60%)] mix-blend-screen animate-glow-orbit" />
@@ -948,8 +898,7 @@ export default function FractalExperience() {
                 Psychedelic {fractalType === 'mandelbrot' ? 'Mandelbrot' : 'Julia'} Explorer
               </h1>
               <p className="max-w-xl text-sm leading-relaxed text-slate-400">
-                Glide the cursor to warp the fractal focus, let the auto-zoom pull you deeper,
-                shuffle the palette, and reroll between Mandelbrot or Julia sets for endless visual trips.
+                Let the living zoom pull you deeper, shuffle the palette, and reroll between Mandelbrot or Julia sets for endless visual trips.
               </p>
             </div>
 

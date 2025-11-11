@@ -9,8 +9,10 @@ const FRACTAL_PALETTES = [
   ['#f97316', '#fb7185', '#f472b6', '#a855f7', '#22d3ee', '#4ade80'],
 ];
 
-const FRAME_INTERVAL = 75;
+const MIN_RENDER_INTERVAL = 5;
 const MAX_DEVICE_PIXEL_RATIO = 2;
+const ZOOM_SMOOTHING_FACTOR = 0.85; // Higher = smoother but slower response (0-1)
+const POINTER_SMOOTHING_FACTOR = 0.12; // Frame-rate independent pointer smoothing
 
 function hexToRgb(hex) {
   const normalized = hex.replace('#', '');
@@ -37,6 +39,45 @@ function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
+function relativeLuminance({ r, g, b }) {
+  const channel = (value) => {
+    const v = value / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  const R = channel(r);
+  const G = channel(g);
+  const B = channel(b);
+  return 0.2126 * R + 0.7152 * G + 0.0722 * B;
+}
+
+function normalizePaletteContrast(lut, minimumRange = 0.65) {
+  const luminances = lut.map(relativeLuminance);
+  const minLum = Math.min(...luminances);
+  const maxLum = Math.max(...luminances);
+  const range = maxLum - minLum;
+
+  const midLum = (maxLum + minLum) / 2;
+  const targetRange = Math.max(minimumRange, range * 1.2);
+  const stretch = targetRange / Math.max(range, 1e-6);
+
+  return lut.map((color, index) => {
+    const currentLum = luminances[index];
+    const targetLum = Math.min(1, Math.max(0, midLum + (currentLum - midLum) * stretch));
+    const currentLinear = relativeLuminance(color);
+
+    if (currentLinear === 0) {
+      return { r: targetLum * 255, g: targetLum * 255, b: targetLum * 255 };
+    }
+
+    const ratio = targetLum / currentLinear;
+    return {
+      r: Math.max(0, Math.min(255, color.r * ratio)),
+      g: Math.max(0, Math.min(255, color.g * ratio)),
+      b: Math.max(0, Math.min(255, color.b * ratio)),
+    };
+  });
+}
+
 function buildPaletteLut(colors, steps = 1024) {
   const rgb = colors.map(hexToRgb);
   const lut = new Array(steps);
@@ -55,7 +96,7 @@ function buildPaletteLut(colors, steps = 1024) {
     };
   }
 
-  return lut;
+  return normalizePaletteContrast(lut);
 }
 
 function randomJuliaSeed() {
@@ -78,8 +119,10 @@ export default function FractalExperience() {
   const [autoZoomSpeed, setAutoZoomSpeed] = useState(() => 0.004 + Math.random() * 0.005);
   const [autoZoomDirection, setAutoZoomDirection] = useState(-1);
   const [statusMessage, setStatusMessage] = useState('');
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const canvasRef = useRef(null);
+  const containerRef = useRef(null);
   const animationRef = useRef(null);
   const pointerRef = useRef({
     targetX: 0.5,
@@ -112,6 +155,7 @@ export default function FractalExperience() {
   const workerRef = useRef(null);
   const contextRef = useRef(null);
   const busyRef = useRef(false);
+  const pendingViewRef = useRef(null);
   const paletteBufferRef = useRef(paletteData.colors);
   const paletteVersionRef = useRef(0);
   const paletteSentVersionRef = useRef(-1);
@@ -140,6 +184,29 @@ export default function FractalExperience() {
   useEffect(() => {
     autoZoomDirectionRef.current = autoZoomDirection;
   }, [autoZoomDirection]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isFullscreenActive =
+        !!document.fullscreenElement ||
+        !!document.webkitFullscreenElement ||
+        !!document.mozFullScreenElement ||
+        !!document.msFullscreenElement;
+      setIsFullscreen(isFullscreenActive);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+    };
+  }, []);
 
   const focusRingClass =
     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400';
@@ -196,7 +263,6 @@ export default function FractalExperience() {
 
       const targetContext = contextRef.current;
       if (!targetContext) {
-        busyRef.current = false;
         return;
       }
 
@@ -207,6 +273,13 @@ export default function FractalExperience() {
       }
 
       busyRef.current = false;
+
+      const queued = pendingViewRef.current;
+      if (queued) {
+        pendingViewRef.current = null;
+        busyRef.current = true;
+        worker.postMessage(queued);
+      }
     };
 
     worker.addEventListener('message', handleWorkerMessage);
@@ -216,17 +289,15 @@ export default function FractalExperience() {
     const renderFrame = (timestamp) => {
       animationRef.current = requestAnimationFrame(renderFrame);
 
-      if (timestamp - lastTimestamp < FRAME_INTERVAL) {
+      const elapsed = timestamp - lastTimestamp;
+      if (elapsed < MIN_RENDER_INTERVAL) {
         return;
       }
       lastTimestamp = timestamp;
+      const deltaSeconds = Math.max(0.001, elapsed / 1000);
 
       const { width, height } = canvas;
       if (!width || !height) {
-        return;
-      }
-
-      if (busyRef.current) {
         return;
       }
 
@@ -241,8 +312,10 @@ export default function FractalExperience() {
       const view = viewRef.current;
       const pointerTarget = pointerRef.current;
 
-      view.pointerX += (pointerTarget.targetX - view.pointerX) * 0.08;
-      view.pointerY += (pointerTarget.targetY - view.pointerY) * 0.08;
+      // Frame-rate independent pointer smoothing for buttery smooth movement
+      const pointerSmoothing = 1 - Math.pow(1 - POINTER_SMOOTHING_FACTOR, deltaSeconds * 60);
+      view.pointerX += (pointerTarget.targetX - view.pointerX) * pointerSmoothing;
+      view.pointerY += (pointerTarget.targetY - view.pointerY) * pointerSmoothing;
 
       const aspectRatio = height / width;
       const scaledHeight = view.scale * aspectRatio;
@@ -258,9 +331,7 @@ export default function FractalExperience() {
         Math.max(180, Math.floor(190 + zoomFactor * 90)),
       );
 
-      busyRef.current = true;
-
-      worker.postMessage({
+      const message = {
         type: 'render',
         width,
         height,
@@ -273,13 +344,34 @@ export default function FractalExperience() {
           scale: view.scale,
           aspectRatio,
         },
-      });
+      };
 
-      const multiplier =
-        autoZoomDirectionRef.current === -1
-          ? 1 - autoZoomSpeedRef.current
-          : 1 + autoZoomSpeedRef.current;
-      view.scale = Math.max(1e-8, Math.min(8, view.scale * multiplier));
+      if (busyRef.current) {
+        pendingViewRef.current = message;
+      } else {
+        busyRef.current = true;
+        worker.postMessage(message);
+      }
+
+      // Ultra-smooth zoom calculation - fully frame-rate independent
+      const zoomRate = autoZoomSpeedRef.current;
+      const zoomDirection = autoZoomDirectionRef.current;
+      const currentScale = view.scale;
+      
+      // Calculate instantaneous zoom multiplier per second
+      const perSecondMultiplier = zoomDirection === -1 
+        ? 1 - zoomRate  // Zoom in (scale decreases)
+        : 1 + zoomRate; // Zoom out (scale increases)
+      
+      // Apply zoom over elapsed time for frame-rate independence
+      const timeBasedMultiplier = Math.pow(perSecondMultiplier, deltaSeconds);
+      const rawTargetScale = currentScale * timeBasedMultiplier;
+      const clampedTargetScale = Math.max(1e-8, Math.min(8, rawTargetScale));
+      
+      // Frame-rate independent exponential smoothing
+      // Converts fixed-per-frame smoothing to time-based smoothing
+      const zoomSmoothing = 1 - Math.pow(ZOOM_SMOOTHING_FACTOR, deltaSeconds * 60);
+      view.scale = currentScale + (clampedTargetScale - currentScale) * zoomSmoothing;
     };
 
     animationRef.current = requestAnimationFrame(renderFrame);
@@ -292,6 +384,7 @@ export default function FractalExperience() {
       workerRef.current = null;
       contextRef.current = null;
       busyRef.current = false;
+      pendingViewRef.current = null;
     };
   }, []);
 
@@ -380,17 +473,63 @@ export default function FractalExperience() {
     pointerRef.current.active = true;
   };
 
+  const handleFullscreenToggle = async () => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const isCurrentlyFullscreen =
+      !!document.fullscreenElement ||
+      !!document.webkitFullscreenElement ||
+      !!document.mozFullScreenElement ||
+      !!document.msFullscreenElement;
+
+    try {
+      if (!isCurrentlyFullscreen) {
+        if (container.requestFullscreen) {
+          await container.requestFullscreen();
+        } else if (container.webkitRequestFullscreen) {
+          await container.webkitRequestFullscreen();
+        } else if (container.mozRequestFullScreen) {
+          await container.mozRequestFullScreen();
+        } else if (container.msRequestFullscreen) {
+          await container.msRequestFullscreen();
+        }
+        setStatusMessage('Entered fullscreen mode');
+      } else {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+          await document.webkitExitFullscreen();
+        } else if (document.mozCancelFullScreen) {
+          await document.mozCancelFullScreen();
+        } else if (document.msExitFullscreen) {
+          await document.msExitFullscreen();
+        }
+        setStatusMessage('Exited fullscreen mode');
+      }
+    } catch (error) {
+      setStatusMessage('Fullscreen not available');
+    }
+  };
+
   const autoZoomValue = Math.round(autoZoomSpeed * 1000);
 
   return (
-    <section className="relative isolate overflow-hidden px-4 py-12 sm:py-16">
-      <div className="pointer-events-none absolute -left-40 top-24 h-80 w-80 rounded-full bg-fuchsia-500/20 blur-3xl sm:h-[26rem] sm:w-[26rem]" />
-      <div className="pointer-events-none absolute -right-24 bottom-12 h-72 w-72 rounded-full bg-cyan-500/10 blur-3xl sm:h-[24rem] sm:w-[24rem]" />
-      <div className="relative z-10 mx-auto flex w-full max-w-6xl flex-col gap-8 rounded-3xl bg-slate-900/70 p-6 shadow-xl ring-1 ring-slate-700/40 backdrop-blur transition-shadow duration-500 hover:shadow-2xl md:p-10">
-        <div className="group relative w-full overflow-hidden rounded-3xl border border-slate-700/50 bg-slate-950/80 shadow-inner">
+    <section className={`relative isolate overflow-hidden ${isFullscreen ? 'h-screen' : 'px-4 py-12 sm:py-16'}`}>
+      {!isFullscreen && (
+        <>
+          <div className="pointer-events-none absolute -left-40 top-24 h-80 w-80 rounded-full bg-fuchsia-500/20 blur-3xl sm:h-[26rem] sm:w-[26rem]" />
+          <div className="pointer-events-none absolute -right-24 bottom-12 h-72 w-72 rounded-full bg-cyan-500/10 blur-3xl sm:h-[24rem] sm:w-[24rem]" />
+        </>
+      )}
+      <div
+        ref={containerRef}
+        className={`relative z-10 mx-auto flex w-full ${isFullscreen ? 'max-w-none h-full' : 'max-w-6xl'} flex-col gap-8 rounded-3xl bg-slate-900/70 p-6 shadow-xl ring-1 ring-slate-700/40 backdrop-blur transition-shadow duration-500 hover:shadow-2xl md:p-10 ${isFullscreen ? 'justify-center' : ''}`}
+      >
+        <div className={`group relative w-full overflow-hidden rounded-3xl border border-slate-700/50 bg-slate-950/80 shadow-inner ${isFullscreen ? 'h-full' : ''}`}>
           <canvas
             ref={canvasRef}
-            className="block w-full cursor-crosshair select-none rounded-3xl bg-slate-950/80 [aspect-ratio:3/2] transition-transform duration-700 ease-out group-hover:scale-[1.01]"
+            className={`block w-full cursor-crosshair select-none rounded-3xl bg-slate-950/80 ${isFullscreen ? 'h-full' : '[aspect-ratio:3/2]'} transition-transform duration-700 ease-out group-hover:scale-[1.01]`}
             role="img"
             aria-label={`Animated ${fractalType === 'mandelbrot' ? 'Mandelbrot' : 'Julia'} fractal visualization`}
             onMouseEnter={handlePointer}
@@ -406,21 +545,30 @@ export default function FractalExperience() {
           </div>
         </div>
 
-        <div className="flex flex-col gap-6 xl:flex-row xl:items-center xl:justify-between">
-          <div className="space-y-2">
-            <p className="text-xs uppercase tracking-[0.35em] text-slate-400">
-              Fractal Lab
-            </p>
-            <h1 className="text-3xl font-semibold text-slate-100 sm:text-4xl">
-              Psychedelic {fractalType === 'mandelbrot' ? 'Mandelbrot' : 'Julia'} Explorer
-            </h1>
-            <p className="max-w-xl text-sm leading-relaxed text-slate-400">
-              Glide the cursor to warp the fractal focus, let the auto-zoom pull you deeper,
-              shuffle the palette, and reroll between Mandelbrot or Julia sets for endless visual trips.
-            </p>
-          </div>
+        {!isFullscreen && (
+          <div className="flex flex-col gap-6 xl:flex-row xl:items-center xl:justify-between">
+            <div className="space-y-2">
+              <p className="text-xs uppercase tracking-[0.35em] text-slate-400">
+                Fractal Lab
+              </p>
+              <h1 className="text-3xl font-semibold text-slate-100 sm:text-4xl">
+                Psychedelic {fractalType === 'mandelbrot' ? 'Mandelbrot' : 'Julia'} Explorer
+              </h1>
+              <p className="max-w-xl text-sm leading-relaxed text-slate-400">
+                Glide the cursor to warp the fractal focus, let the auto-zoom pull you deeper,
+                shuffle the palette, and reroll between Mandelbrot or Julia sets for endless visual trips.
+              </p>
+            </div>
 
-          <div className="flex flex-wrap items-center justify-start gap-3 md:gap-4">
+            <div className="flex flex-wrap items-center justify-start gap-3 md:gap-4">
+            <button
+              type="button"
+              onClick={handleFullscreenToggle}
+              className={`${neutralButtonClass} hover:shadow-[0_18px_45px_rgba(14,165,233,0.25)]`}
+              aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            >
+              {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+            </button>
             <button
               type="button"
               onClick={handlePaletteShuffle}
@@ -466,9 +614,24 @@ export default function FractalExperience() {
               </button>
             )}
           </div>
-        </div>
+          </div>
+        )}
 
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+        {isFullscreen && (
+          <div className="absolute top-4 right-4 z-20 flex gap-2">
+            <button
+              type="button"
+              onClick={handleFullscreenToggle}
+              className={`${neutralButtonClass} hover:shadow-[0_18px_45px_rgba(14,165,233,0.25)]`}
+              aria-label="Exit fullscreen"
+            >
+              Exit Fullscreen
+            </button>
+          </div>
+        )}
+
+        {!isFullscreen && (
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
           <label className="flex w-full max-w-xl items-center gap-3 text-sm text-slate-300">
             <span className="font-medium text-slate-100">Auto Zoom Speed</span>
             <input
@@ -500,6 +663,7 @@ export default function FractalExperience() {
             </div>
           </div>
         </div>
+        )}
       </div>
       <span aria-live="polite" role="status" className="sr-only">
         {statusMessage}

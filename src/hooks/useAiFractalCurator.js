@@ -1,10 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import AI_SETTINGS, { FRACTAL_DIRECTIVE_SCHEMA } from '../config/aiSettings.js';
-import { FRACTAL_PALETTES, FRACTAL_VARIANTS } from '../config/fractalSettings.js';
+import {
+  FRACTAL_CONSTANTS,
+  FRACTAL_PALETTES,
+  FRACTAL_VARIANTS,
+} from '../config/fractalSettings.js';
 import { createAiClient } from '../lib/aiClient.js';
 import { clamp } from '../utils/math.js';
 
 const DIRECTIVE_CADENCE_LIMITS = Object.freeze({ min: 15_000, max: 180_000 });
+const {
+  AUTO_ZOOM_MIN_PERCENT,
+  AUTO_ZOOM_MAX_PERCENT,
+} = FRACTAL_CONSTANTS;
 
 const normalizeCadence = (value, fallback = AI_SETTINGS.suggestionIntervalMs) => {
   const base = Number.isFinite(value) ? value : fallback;
@@ -45,6 +53,19 @@ const sanitizeDirective = (raw, baseState, { cadenceDefault }) => {
 
   if (raw.preset && typeof raw.preset === 'string') {
     sanitized.preset = raw.preset;
+  }
+
+  if (Number.isFinite(raw.autoZoomPercent)) {
+    const rounded = Math.round(raw.autoZoomPercent);
+    sanitized.autoZoomPercent = clamp(rounded, AUTO_ZOOM_MIN_PERCENT, AUTO_ZOOM_MAX_PERCENT);
+  }
+
+  if (raw.autoZoomDirection === -1 || raw.autoZoomDirection === 1) {
+    sanitized.autoZoomDirection = raw.autoZoomDirection;
+  }
+
+  if (typeof raw.mutationsEnabled === 'boolean') {
+    sanitized.mutationsEnabled = raw.mutationsEnabled;
   }
 
   if (raw.statusMessage && typeof raw.statusMessage === 'string') {
@@ -103,9 +124,10 @@ export function useAiFractalCurator({
   autoCadenceMs = AI_SETTINGS.suggestionIntervalMs,
   fallbackGenerator = generateFallbackDirective,
 } = {}) {
+  const initialCadence = normalizeCadence(autoCadenceMs);
   const stateRef = useRef(currentState);
   const historyRef = useRef([]);
-  const cadenceRef = useRef(normalizeCadence(autoCadenceMs));
+  const cadenceRef = useRef(initialCadence);
   const timeoutRef = useRef(null);
   const abortRef = useRef(null);
 
@@ -114,12 +136,25 @@ export function useAiFractalCurator({
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [cadenceMs, setCadenceMs] = useState(initialCadence);
 
   useEffect(() => {
     stateRef.current = currentState;
   }, [currentState]);
 
-  const cadenceMs = useMemo(() => cadenceRef.current, [lastDirective]);
+  const applyCadence = useCallback(
+    (value) => {
+      const normalized = normalizeCadence(value, autoCadenceMs);
+      cadenceRef.current = normalized;
+      setCadenceMs(normalized);
+      return normalized;
+    },
+    [autoCadenceMs],
+  );
+
+  useEffect(() => {
+    applyCadence(autoCadenceMs);
+  }, [autoCadenceMs, applyCadence]);
 
   const clearScheduledRequest = useCallback(() => {
     if (timeoutRef.current) {
@@ -137,67 +172,67 @@ export function useAiFractalCurator({
 
   const requestSuggestion = useCallback(
     async (options = {}) => {
-      const state = stateRef.current;
-      if (!state) {
-        return null;
-      }
-
-      cleanupAbort();
-      const controller = new AbortController();
-      abortRef.current = controller;
-
-      const history = historyRef.current.slice(-AI_SETTINGS.historyLimit);
-      const cadenceDefault = normalizeCadence(cadenceRef.current, autoCadenceMs);
-      const payload = {
-        currentState: state,
-        recentHistory: history,
-      };
-
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const rawDirective = await aiClient.requestDirective(payload, 0, controller.signal);
-        const sanitized = sanitizeDirective(rawDirective, state, { cadenceDefault });
-        if (!sanitized) {
-          throw new Error('AI response did not include actionable fields');
+        const state = stateRef.current;
+        if (!state) {
+          return null;
         }
 
-        historyRef.current = [...history, { ...state, timestamp: Date.now() }].slice(
-          -AI_SETTINGS.historyLimit,
-        );
-        cadenceRef.current = normalizeCadence(sanitized.cadenceMs, cadenceDefault);
-        setLastDirective(sanitized);
-        setLastSource('ai');
-        setLastUpdatedAt(Date.now());
-        return { directive: sanitized, source: 'ai' };
-      } catch (err) {
-        const fallback = fallbackGenerator(state, history, cadenceDefault);
-        cadenceRef.current = normalizeCadence(fallback.directive.cadenceMs, cadenceDefault);
-        setError(err);
-        setLastDirective(fallback.directive);
-        setLastSource(fallback.source);
-        setLastUpdatedAt(Date.now());
-        return fallback;
-      } finally {
-        setIsLoading(false);
-        abortRef.current = null;
-        if (timeoutRef.current) {
-          clearTimeout(timeoutRef.current);
-          timeoutRef.current = null;
-        }
-        if (options.reschedule !== false && (options.forceSchedule || isEnabled)) {
-          const delay = normalizeCadence(
-            options.delayOverride ?? cadenceRef.current ?? autoCadenceMs,
-            autoCadenceMs,
+        cleanupAbort();
+        const controller = new AbortController();
+        abortRef.current = controller;
+
+        const history = historyRef.current.slice(-AI_SETTINGS.historyLimit);
+        const cadenceDefault = normalizeCadence(cadenceRef.current, autoCadenceMs);
+        const payload = {
+          currentState: state,
+          recentHistory: history,
+        };
+
+        setIsLoading(true);
+        setError(null);
+
+        try {
+          const rawDirective = await aiClient.requestDirective(payload, 0, controller.signal);
+          const sanitized = sanitizeDirective(rawDirective, state, { cadenceDefault });
+          if (!sanitized) {
+            throw new Error('AI response did not include actionable fields');
+          }
+
+          historyRef.current = [...history, { ...state, timestamp: Date.now() }].slice(
+            -AI_SETTINGS.historyLimit,
           );
-          timeoutRef.current = setTimeout(() => {
-            requestSuggestion({ forceSchedule: true });
-          }, delay);
+          applyCadence(sanitized.cadenceMs ?? cadenceDefault);
+          setLastDirective(sanitized);
+          setLastSource('ai');
+          setLastUpdatedAt(Date.now());
+          return { directive: sanitized, source: 'ai' };
+        } catch (err) {
+          const fallback = fallbackGenerator(state, history, cadenceDefault);
+          applyCadence(fallback.directive.cadenceMs ?? cadenceDefault);
+          setError(err);
+          setLastDirective(fallback.directive);
+          setLastSource(fallback.source);
+          setLastUpdatedAt(Date.now());
+          return fallback;
+        } finally {
+          setIsLoading(false);
+          abortRef.current = null;
+          if (timeoutRef.current) {
+            clearTimeout(timeoutRef.current);
+            timeoutRef.current = null;
+          }
+          if (options.reschedule !== false && (options.forceSchedule || isEnabled)) {
+            const delay = normalizeCadence(
+              options.delayOverride ?? cadenceRef.current ?? autoCadenceMs,
+              autoCadenceMs,
+            );
+            timeoutRef.current = setTimeout(() => {
+              requestSuggestion({ forceSchedule: true });
+            }, delay);
+          }
         }
-      }
-    },
-    [aiClient, autoCadenceMs, fallbackGenerator, cleanupAbort, isEnabled],
+      },
+      [aiClient, autoCadenceMs, fallbackGenerator, cleanupAbort, isEnabled, applyCadence],
   );
 
   useEffect(() => {

@@ -19,8 +19,12 @@ const {
  * @param {() => number} [rng=Math.random]
  */
 export function pickSceneDefinition(excludeName, scenes = SCENE_DEFINITIONS, rng = Math.random) {
-  const options = excludeName ? scenes.filter((scene) => scene.name !== excludeName) : scenes;
-  return pickFrom(options, rng);
+  const filtered = excludeName ? scenes.filter((scene) => scene.name !== excludeName) : scenes;
+  const candidates = filtered.length ? filtered : scenes;
+  if (!candidates.length) {
+    throw new Error('No scene definitions available to select from.');
+  }
+  return pickFrom(candidates, rng);
 }
 
 /**

@@ -20,6 +20,13 @@ describe('fractal control utilities', () => {
     expect(result.name).not.toBe('a');
   });
 
+  it('pickSceneDefinition falls back when exclusions remove all candidates', () => {
+    const scenes = [{ name: 'solo' }];
+    const rng = () => 0;
+    const result = pickSceneDefinition('solo', scenes, rng);
+    expect(result.name).toBe('solo');
+  });
+
   it('pickFocusTarget returns jittered focus coordinates', () => {
     const focusPresets = {
       mandelbrot: {

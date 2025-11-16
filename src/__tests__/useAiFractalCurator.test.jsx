@@ -22,7 +22,9 @@ describe('useAiFractalCurator', () => {
   it('returns AI directive when the client resolves successfully', async () => {
     const directive = {
       paletteIndex: 3,
-      autoZoomPercent: 58,
+      autoZoomPercent: 150,
+      autoZoomDirection: 1,
+      mutationsEnabled: false,
       statusMessage: 'AI shift',
     };
     const client = {
@@ -47,7 +49,9 @@ describe('useAiFractalCurator', () => {
       paletteIndex: directive.paletteIndex,
       statusMessage: directive.statusMessage,
     });
-    expect(result.current.lastDirective.autoZoomPercent).toBeUndefined();
+    expect(result.current.lastDirective.autoZoomPercent).toBe(100);
+    expect(result.current.lastDirective.autoZoomDirection).toBe(1);
+    expect(result.current.lastDirective.mutationsEnabled).toBe(false);
     expect(result.current.lastDirective.cadenceMs).toBeGreaterThanOrEqual(15_000);
     expect(result.current.lastSource).toBe('ai');
     expect(result.current.error).toBeNull();
@@ -79,6 +83,35 @@ describe('useAiFractalCurator', () => {
     });
     expect(result.current.lastDirective.cadenceMs).toBeGreaterThanOrEqual(15_000);
     expect(result.current.error).toBeTruthy();
+  });
+
+  it('updates cadence value when autoCadenceMs prop changes', () => {
+    const client = {
+      requestDirective: vi.fn(),
+    };
+
+    const { result, rerender } = renderHook(
+      (props) => useAiFractalCurator(props),
+      {
+        initialProps: {
+          isEnabled: false,
+          currentState: baseState,
+          aiClient: client,
+          autoCadenceMs: 20_000,
+        },
+      },
+    );
+
+    expect(result.current.cadenceMs).toBe(20_000);
+
+    rerender({
+      isEnabled: false,
+      currentState: baseState,
+      aiClient: client,
+      autoCadenceMs: 30_000,
+    });
+
+    expect(result.current.cadenceMs).toBe(30_000);
   });
 });
 
